@@ -203,9 +203,14 @@ def _braces_to_indent(code: str) -> str:
 
 		# Colon-style block closers: end / endif / endforeach / …
 		if _re_brace_block_close.match(stripped):
-			depth = max(0, depth - 1)
-			if len(_class_stack) > 1:
-				_class_stack.pop()
+			if depth > 0:
+				depth -= 1
+				if len(_class_stack) > 1:
+					_class_stack.pop()
+			else:
+				# Unmatched closer at the top level — pass it through so
+				# _tokens_to_python can use it to decrement the outer indent.
+				result.append(stripped)
 			continue
 
 		# elif / else / except / finally — same-level transition
@@ -230,6 +235,79 @@ def _braces_to_indent(code: str) -> str:
 			continue
 
 		result.append(_BRACE_INDENT * depth + stripped)
+
+	return '\n'.join(result)
+
+
+_re_inline_end = re.compile(r';\s*end\s*:?\s*$')
+
+
+def _split_inline_blocks(code: str) -> str:
+	"""Split single-line inline blocks into two lines.
+
+	Transforms 'for ...: body; end' -> 'for ...:\\nbody'.
+
+	This runs after foreach→for and endforeach→end so the 'for' header is
+	already in Python form.  It must run before the echo conversion (step 9)
+	which only recognises echo at the start of a line.
+	"""
+	lines = code.splitlines()
+	result: list[str] = []
+	_openers = ('for ', 'if ', 'elif ', 'while ', 'with ',
+	            'for(', 'if(', 'while(')
+	for raw_line in lines:
+		stripped = raw_line.strip()
+		# Only process lines that start with a block-opening keyword
+		if not any(stripped.startswith(kw) for kw in _openers):
+			result.append(raw_line)
+			continue
+
+		# Character-level scan to find the colon that closes the block header,
+		# skipping over string literals and nested parentheses.
+		n, i, depth, colon_pos = len(stripped), 0, 0, None
+		while i < n:
+			c = stripped[i]
+			# f-strings: skip the 'f' prefix so the quote handling below works
+			if c == 'f' and i + 1 < n and stripped[i + 1] in ('"', "'"):
+				i += 1
+				c = stripped[i]
+			if c in ('"', "'"):
+				q, i = c, i + 1
+				while i < n:
+					if stripped[i] == '\\':
+						i += 2
+						continue
+					if stripped[i] == q:
+						break
+					i += 1
+			elif c in ('(', '['):
+				depth += 1
+			elif c in (')', ']'):
+				depth -= 1
+			elif c == ':' and depth == 0:
+				colon_pos = i
+				break
+			i += 1
+
+		if colon_pos is None:
+			result.append(raw_line)
+			continue
+
+		after = stripped[colon_pos + 1:].strip()
+		# Only split when the remainder has a body AND ends with "; end"
+		if not after or not _re_inline_end.search(after):
+			result.append(raw_line)
+			continue
+
+		body = _re_inline_end.sub('', after).rstrip()
+		if not body:
+			result.append(raw_line)
+			continue
+
+		leading = raw_line[: len(raw_line) - len(stripped)]
+		result.append(leading + stripped[: colon_pos + 1])
+		result.append(leading + body)
+		result.append(leading + 'end')  # close the block for _braces_to_indent
 
 	return '\n'.join(result)
 
@@ -465,6 +543,9 @@ def php_to_python(code: str) -> str:
 	code = re.sub(r'^(for|if|elif|while|with)\b(.+?)\s*:?$', r'\1\2:', code.strip())
 	# 2. endif/endforeach/endwhile/endfor -> end
 	code = _re_end.sub('end', code)
+	# 2a. Split single-line inline blocks: "for ...: body; end" -> "for ...:\nbody"
+	#     Must run before echo conversion (step 9) which requires echo at line start.
+	code = _split_inline_blocks(code)
 	# 3. new ClassName( -> ClassName(
 	code = _re_new.sub(r'\1(', code)
 	# 4. count( -> len(  outside strings
@@ -541,11 +622,11 @@ def php_to_python(code: str) -> str:
 		lambda m: f'_require({_rewrite_require(m.group(1))!r})',
 		code
 	)
-	# 11. Brace-to-indent: convert PHP { } blocks to Python indentation.
-	#     Applied when braces are present (i.e., function bodies or brace-style
-	#     if/for/while blocks).  Must run last so all keyword conversions are done.
-	if '{' in code or '}' in code:
-		code = _braces_to_indent(code)
+	# 11. Brace-to-indent: convert PHP { } blocks to Python indentation, and
+	#     normalise indentation in multi-line code blocks (foreach+body+endforeach
+	#     in one <?php ?> tag).  Always applied so that multi-line blocks without
+	#     explicit braces are also indented correctly.
+	code = _braces_to_indent(code)
 	return code
 
 
@@ -705,6 +786,34 @@ def _make_php_builtins() -> dict:
 	def _empty(x):
 		return x in (None, False, 0, 0.0, '', '0', [], {})
 
+	# ── hashing ───────────────────────────────────────────────────────────────
+	def _hash(algo, data, raw_output=False):
+		import hashlib
+		normalized_algo = str(algo).lower().replace('-', '')
+		encoded_data = str(data).encode('utf-8')
+		if normalized_algo in ('fnv1a32', 'fnv132'):
+			h = 2166136261
+			for byte in encoded_data:
+				if normalized_algo == 'fnv1a32':
+					h = ((h ^ byte) * 16777619) & 0xFFFFFFFF
+				else:
+					h = ((h * 16777619) ^ byte) & 0xFFFFFFFF
+			digest = h.to_bytes(4, 'big')
+		elif normalized_algo in ('fnv1a64', 'fnv164'):
+			h = 14695981039346656037
+			for byte in encoded_data:
+				if normalized_algo == 'fnv1a64':
+					h = ((h ^ byte) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+				else:
+					h = ((h * 1099511628211) ^ byte) & 0xFFFFFFFFFFFFFFFF
+			digest = h.to_bytes(8, 'big')
+		else:
+			try:
+				digest = hashlib.new(normalized_algo, encoded_data).digest()
+			except ValueError:
+				raise ValueError(f'Unknown hashing algorithm: {algo!r}')
+		return digest if raw_output else digest.hex()
+
 	return {
 		# string
 		'strlen':              _strlen,
@@ -790,6 +899,8 @@ def _make_php_builtins() -> dict:
 		# serialisation
 		'json_encode':         lambda x, flags=0: json.dumps(x),
 		'json_decode':         lambda x, assoc=False: json.loads(x),
+		# hashing
+		'hash':                _hash,
 		# internal: used by the PHP-concat translator (not called directly by templates)
 		'_cat':                lambda *args: ''.join(str(a) for a in args),
 	}
@@ -889,7 +1000,11 @@ def _tokens_to_python(tokens: list) -> str:
 	tab = '	'
 
 	def emit(line):
-		lines.append(tab * indent + line)
+		if '\n' in line:
+			for code_line in line.split('\n'):
+				lines.append(tab * indent + code_line)
+		else:
+			lines.append(tab * indent + line)
 
 	for token in tokens:
 		if isinstance(token, TextToken):
