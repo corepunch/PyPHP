@@ -229,6 +229,39 @@ php | python | ruby
 
 ---
 
+### 9 — Function definitions
+
+```php
+<?php
+function add($a, $b) {
+    return $a + $b;
+}
+function greet($name) {
+    return "Hello, " . $name . "!";
+}
+function printItems($items) {
+    foreach ($items as $item) {
+        echo $item . "\n";
+    }
+}
+?>
+<?= add(3, 4) ?>
+<?= greet("World") ?>
+<?php $fruits = ["apple", "banana", "cherry"]; ?>
+<?php printItems($fruits); ?>
+```
+
+Output:
+```
+7
+Hello, World!
+apple
+banana
+cherry
+```
+
+---
+
 ## Using PyPHP as a Library
 
 ```python
@@ -267,7 +300,7 @@ ctx = Context(
 | `while` | `while ($n > 0):` | Standard loop |
 | Block-end keywords | `endif`, `endforeach`, `endwhile`, `endfor` | Closes the nearest open block |
 | `count()` | `count($arr)` | Mapped to `len()` |
-| `echo` | `echo $x` | Outputs the value |
+| `echo` | `echo $x` | Outputs the value (works inside function bodies too) |
 | Line comments | `// text` | Mapped to `# text` |
 | File inclusion | `require "file.php"` or `require "file.py"` | Executes the file in the current scope |
 | Arithmetic | `+`, `-`, `*`, `/`, `%` | Delegated to Python |
@@ -281,6 +314,7 @@ ctx = Context(
 | `include` / `require_once` / `include_once` | `include "file.php"` | Alias for `require`; executes file in current scope |
 | Type casting | `(int)$x`, `(float)$x`, `(string)$x`, `(bool)$x` | Mapped to `int()`, `float()`, `str()`, `bool()` |
 | `list()` assignment | `list($a, $b) = $arr` | Mapped to Python tuple unpacking |
+| Function definitions | `function foo($a, $b) { ... }` | Named functions with parameters; body uses `{}`; supports `return` and `echo` |
 | PHP string functions | `strlen()`, `strtolower()`, `strtoupper()`, `trim()`, `str_replace()`, `substr()`, `strpos()`, `sprintf()`, `ucfirst()`, `ucwords()`, `str_repeat()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `number_format()`, `nl2br()`, `htmlspecialchars()`, `strip_tags()`, `str_split()`, … | Available directly in templates |
 | PHP array functions | `implode()`, `explode()`, `in_array()`, `array_merge()`, `array_keys()`, `array_values()`, `array_map()`, `array_filter()`, `array_reverse()`, `array_unique()`, `array_push()`, `array_pop()`, `array_shift()`, `array_slice()`, `array_chunk()`, `array_sum()`, `array_flip()`, `array_search()`, `sort()`, `rsort()`, … | Available directly in templates |
 | Math functions | `abs()`, `ceil()`, `floor()`, `round()`, `pow()`, `sqrt()`, `max()`, `min()`, `rand()` | Available directly in templates |
@@ -297,7 +331,7 @@ The following PHP features are not currently translated and are on the roadmap:
 |---|---|---|
 | PHP ternary operator | `$a ? $b : $c` | ⏳ Planned (use Python `$b if $a else $c` for now) |
 | `switch` / `case` | `switch ($x) { case 1: ... }` | ⏳ Planned |
-| Class / function definitions in templates | `function foo() { ... }` | ⏳ Planned |
+| Class definitions | `class Foo { ... }` | ⏳ Planned |
 
 > **Tip:** Because the code inside `<?php ?>` tags is executed as Python, you can use any Python expression or built-in directly — `len()`, `range()`, `sorted()`, list comprehensions, etc.
 

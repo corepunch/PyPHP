@@ -85,6 +85,21 @@ def _cast_repl(m: re.Match) -> str:
 # PHP concatenation assignment .= -> +=
 _re_concat_assign = re.compile(r'\.=')
 
+# PHP function declarations
+# Matches: function foo(__a, __b = None) { or function foo() {}
+_re_func_empty = re.compile(r'\bfunction\s+(\w+)\s*\(([^)]*)\)\s*\{\s*\}')
+_re_func_keyword = re.compile(r'\bfunction\s+(\w+)\b')
+
+# Statement keywords that prefix an expression (extracted before concat processing)
+_STMT_KEYWORDS = ('echo ', 'return ', 'print ')
+
+# Indentation unit used by _braces_to_indent (4-space Python convention)
+_BRACE_INDENT = '    '
+
+# Patterns used inside _braces_to_indent to handle colon-style blocks
+_re_brace_block_open  = re.compile(r'^(for|if|elif|else|with|while|try|except|finally|def)\b.*:$')
+_re_brace_block_close = re.compile(r'^(end|endforeach|endif|endwhile|endfor|endelse)\s*;?\s*$')
+
 
 def _sub_outside_strings(pattern, repl, code):
 	result, pos = [], 0
@@ -94,6 +109,67 @@ def _sub_outside_strings(pattern, repl, code):
 		pos = m.end()
 	result.append(pattern.sub(repl, code[pos:]))
 	return ''.join(result)
+
+
+def _braces_to_indent(code: str) -> str:
+	"""Convert PHP brace-delimited blocks to Python indentation.
+
+	Handles function bodies and mixed-style code where brace blocks { } appear
+	alongside colon-style blocks (if ...: / endif) within a single PHP segment.
+	Processes line by line, tracking brace and colon block depth.
+	"""
+	lines = code.splitlines()
+	result: list[str] = []
+	depth = 0
+
+	for line in lines:
+		stripped = line.strip()
+
+		if not stripped:
+			result.append('')
+			continue
+
+		# Standalone closing brace — ends a block, not emitted
+		if stripped in ('}', '};'):
+			depth = max(0, depth - 1)
+			continue
+
+		# Standalone opening brace (K&R / Allman style on its own line)
+		if stripped == '{':
+			depth += 1
+			continue
+
+		# Line ending with { — block opener (e.g. `def foo():` already has :,
+		# or `if (__x > 0)` needs one appended)
+		if stripped.endswith('{'):
+			content = stripped[:-1].rstrip()
+			if not content.endswith(':'):
+				content += ':'
+			result.append(_BRACE_INDENT * depth + content)
+			depth += 1
+			continue
+
+		# Colon-style block closers: end / endif / endforeach / …
+		if _re_brace_block_close.match(stripped):
+			depth = max(0, depth - 1)
+			continue
+
+		# elif / else / except / finally — same-level transition
+		if stripped.startswith(('elif ', 'else', 'except', 'finally')):
+			depth = max(0, depth - 1)
+			result.append(_BRACE_INDENT * depth + stripped)
+			depth += 1
+			continue
+
+		# Colon-style block openers: if ...:  /  for ...:  /  def ...:  / …
+		if _re_brace_block_open.match(stripped):
+			result.append(_BRACE_INDENT * depth + stripped)
+			depth += 1
+			continue
+
+		result.append(_BRACE_INDENT * depth + stripped)
+
+	return '\n'.join(result)
 
 
 def _php_string_interpolation(code: str) -> str:
@@ -149,28 +225,42 @@ def _apply_php_concat(code: str) -> str:
 	Uses a character-level scan so string literals inside a chain are kept as atomic
 	operands (not broken apart).  _cat() coerces every arg to str (PHP semantics).
 	Must be called *before* -> is converted to . so no method-access dots exist yet.
-	Statement boundaries (;) and nested parens are respected so assignments are safe.
+	Statement boundaries (;) and newlines are respected so assignments are safe.
+	echo EXPR . REST is preserved with echo as a keyword prefix, not a concat operand.
 	"""
 	n = len(code)
 	result:  list[str] = []
 	chain:   list[str] = []   # operands in the current concat chain
 	current: list[str] = []   # chars of the operand being built
+	echo_prefix = ['']        # mutable holder so closures can update it
 	depth = 0
 	i = 0
 
 	def flush_current() -> None:
-		part = ''.join(current).strip()
+		part = ''.join(current)
 		current.clear()
-		if part:
-			chain.append(part)
+		if not part.strip():
+			return
+		# If this is the first operand and starts with a statement keyword
+		# (echo, return, print), extract it so concat only wraps the expression.
+		if not chain and not echo_prefix[0]:
+			stripped = part.lstrip()
+			for _kw in _STMT_KEYWORDS:
+				if stripped.startswith(_kw):
+					echo_prefix[0] = stripped[:len(_kw)]
+					part = stripped[len(_kw):]   # expression after keyword
+					break
+		chain.append(part)
 
 	def flush_chain() -> None:
+		pfx = echo_prefix[0]
+		echo_prefix[0] = ''
 		if not chain:
 			return
 		if len(chain) == 1:
-			result.append(chain[0])
+			result.append(pfx + chain[0].strip() if pfx else chain[0])
 		else:
-			result.append('_cat(' + ', '.join(chain) + ')')
+			result.append(pfx + '_cat(' + ', '.join(p.strip() for p in chain) + ')')
 		chain.clear()
 
 	while i < n:
@@ -208,6 +298,12 @@ def _apply_php_concat(code: str) -> str:
 			flush_current()
 			flush_chain()
 			result.append(';')
+
+		# ── newline: also a statement boundary (concat never spans lines) ─────
+		elif ch == '\n' and depth == 0:
+			flush_current()
+			flush_chain()
+			result.append('\n')
 
 		# ── potential concat dot ───────────────────────────────────────────────
 		elif ch == '.' and depth == 0:
@@ -289,8 +385,28 @@ def php_to_python(code: str) -> str:
 		lambda m: m.group(1),
 		code,
 	)
-	# 9. strip echo
-	code = _re_echo.sub('', code)
+	# 8b. PHP function declarations -> Python def (after $var->__var so params are __name)
+	#     Empty body: function foo(__a) {} -> def foo(__a): pass
+	code = _sub_outside_strings(
+		_re_func_empty,
+		lambda m: f'def {m.group(1)}({m.group(2)}): pass',
+		code,
+	)
+	#     Named function keyword: function foo -> def foo (brace-to-indent handles the {})
+	code = _sub_outside_strings(
+		_re_func_keyword,
+		lambda m: f'def {m.group(1)}',
+		code,
+	)
+	# 9. echo -> _out.append(str(expr))  — works in all positions (MULTILINE)
+	#    This replaces the old "strip echo" behaviour and makes echo produce output
+	#    everywhere, including inside function bodies.
+	code = re.sub(
+		r'^\s*echo\s+(.+?)[ \t]*;?[ \t]*$',
+		lambda m: f'_out.append(str({m.group(1).strip()}))',
+		code,
+		flags=re.MULTILINE,
+	)
 	# strip trailing PHP semicolons
 	code = re.sub(r';\s*$', '', code.strip())
 	# 10. require/include/require_once/include_once -> _require(...)
@@ -299,6 +415,11 @@ def php_to_python(code: str) -> str:
 		lambda m: f'_require({_rewrite_require(m.group(1))!r})',
 		code
 	)
+	# 11. Brace-to-indent: convert PHP { } blocks to Python indentation.
+	#     Applied when braces are present (i.e., function bodies or brace-style
+	#     if/for/while blocks).  Must run last so all keyword conversions are done.
+	if '{' in code or '}' in code:
+		code = _braces_to_indent(code)
 	return code
 
 
@@ -633,7 +754,7 @@ def tokenize(source: str) -> list:
 
 # ── code generation ───────────────────────────────────────────────────────────
 
-_BLOCK_OPEN  = re.compile(r'^(for|if|elif|else|with|while|try|except|finally)\b.*:$')
+_BLOCK_OPEN  = re.compile(r'^(for|if|elif|else|with|while|try|except|finally|def)\b.*:$')
 _BLOCK_CLOSE = re.compile(r'^(end|endforeach|endif|endwhile|endfor|endelse)$')
 
 
