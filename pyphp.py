@@ -13,12 +13,23 @@ PHP conversions applied inside <?php ?> and <?= ?> tags:
 	count($x)				  ->  len(__x)
 	echo $x					->  __x
 	// comment				 ->  # comment
+	/* comment */			  ->  (removed)
 	"Hello $name"			  ->  f"Hello {__name}"  (string interpolation)
 	$a . $b					->  __a + __b  (concatenation)
 	(int)$x					->  int(__x)   (type cast)
 	list($a, $b) = $arr		->  __a, __b = __arr
 	use A\\B\\C;			   ->  import A.B.C as C  (namespace import)
 	use A\\B\\C as D;		  ->  import A.B.C as D
+	class Foo { ... }		  ->  class Foo: ... (brace-to-indent)
+	class Foo extends Bar	  ->  class Foo(Bar)
+	public/private/protected   ->  (stripped)
+	$this->attr				->  self.attr
+	function __construct	   ->  def __init__
+	parent::__construct		->  super().__init__
+	ClassName::member		  ->  ClassName.member
+	const NAME = val		   ->  NAME = val
+	$arr[] = val			   ->  __arr.append(val)
+	&& / || / !				->  and / or / not
 """
 
 import math
@@ -37,12 +48,50 @@ _re_foreach_v  = re.compile(r'foreach\s*\((.+?)\s+as\s+\$(\w+)\s*\)[ \t]*:?')
 _re_new		= re.compile(r'\bnew\s+([A-Za-z_]\w*)\s*\(')
 _re_count	  = re.compile(r'\bcount\s*\(')
 _re_comment	= re.compile(r'(?<!:)//(.*)$', re.MULTILINE)
+# PHP block comments /* ... */ — strip comment AND surrounding horizontal whitespace
+# so "/* comment */ $x" -> "$x" without a leading space on the line.
+_re_block_comment = re.compile(r'[ \t]*/\*.*?\*/[ \t]*', re.DOTALL)
 _re_echo	   = re.compile(r'^\s*echo\s+')
 _re_end		= re.compile(r'\b(endif|endforeach|endwhile|endfor)\b')
 # PHP 'use' statements (namespace imports and trait uses) -> Python import.
 # use A\B\C;        ->  import A.B.C as C
 # use A\B\C as D;   ->  import A.B.C as D
 _re_use		= re.compile(r'^\s*use\s+([\w\\]+)(?:\s+as\s+(\w+))?\s*;\s*$', re.MULTILINE)
+
+# PHP class-related patterns
+# Visibility/modifier keywords before function/class declarations
+_re_visibility   = re.compile(r'\b(public|private|protected|abstract|final)\s+(?=(?:static\s+)?(?:function|class)\b)')
+# static keyword directly before function (strip it for Python)
+_re_static_func  = re.compile(r'\bstatic\s+(?=function\b)')
+# class Foo extends Bar  ->  class Foo(Bar)
+_re_class_extends = re.compile(r'\bclass\s+(\w+)\s+extends\s+(\w+)')
+# else if  ->  elif  (before brace normalisation)
+_re_else_if      = re.compile(r'\belse\s+if\b')
+# function __construct  ->  function __init__
+_re_construct    = re.compile(r'\bfunction\s+__construct\b')
+# parent::__construct call  ->  super().__init__
+# Applied AFTER _apply_php_concat to avoid the dot being treated as concat.
+_re_parent_construct = re.compile(r'\bparent::__construct\b')
+# static / class access operator ::  ->  .
+# Applied AFTER _apply_php_concat to avoid the dot being treated as concat.
+_re_double_colon = re.compile(r'::')
+# const NAME = val;  ->  NAME = val;  (class constants and top-level consts)
+_re_const        = re.compile(r'^\s*const\s+', re.MULTILINE)
+# PHP array append  ->  .append()
+# Applied AFTER _apply_php_concat (dots in .append wouldn't be concat, but
+# the $var form is safe pre-concat since $var has no dot yet).
+# Both forms are processed post-concat for consistency.
+_re_arr_append_var  = re.compile(r'\$(\w+)\[\]\s*=\s*(.+)')
+_re_arr_append_self = re.compile(r'(self\.[\w]+)\[\]\s*=\s*(.+)')
+# PHP logical operators
+_re_php_and = re.compile(r'&&')
+_re_php_or  = re.compile(r'\|\|')
+_re_php_not = re.compile(r'!(?!=)')  # ! not followed by =
+# $this->  ->  self.   and  $this  ->  self
+# Applied AFTER _apply_php_concat so that "self.attr" dots are not mistaken
+# for PHP concatenation dots by _apply_php_concat.
+_re_this_arrow = re.compile(r'\$this->')
+_re_this_bare  = re.compile(r'\$this\b')
 
 
 def _use_repl(m: re.Match) -> str:
@@ -116,11 +165,27 @@ def _braces_to_indent(code: str) -> str:
 
 	Handles function bodies and mixed-style code where brace blocks { } appear
 	alongside colon-style blocks (if ...: / endif) within a single PHP segment.
-	Processes line by line, tracking brace and colon block depth.
+	Tracks a block_stack so that 'def' lines directly inside a 'class' body get
+	'self' injected as the first parameter.
 	"""
 	lines = code.splitlines()
 	result: list[str] = []
 	depth = 0
+	# Stack tracking the type of each open block: 'class' or 'other'.
+	# Used to detect when a def sits directly inside a class body.
+	block_stack: list[str] = []
+
+	def _maybe_inject_self(content: str) -> str:
+		"""If content is 'def foo(...)' and we're directly in a class body,
+		prepend 'self' (or 'self, ') to the parameter list."""
+		if block_stack and block_stack[-1] == 'class':
+			m = re.match(r'^(def\s+\w+\s*\()([^)]*)\)', content)
+			if m:
+				params = m.group(2).strip()
+				if not params.startswith('self'):
+					new_params = ('self, ' + params) if params else 'self'
+					content = content[:m.start(2)] + new_params + content[m.end(2):]
+		return content
 
 	for line in lines:
 		stripped = line.strip()
@@ -131,40 +196,64 @@ def _braces_to_indent(code: str) -> str:
 
 		# Standalone closing brace — ends a block, not emitted
 		if stripped in ('}', '};'):
+			if block_stack:
+				block_stack.pop()
 			depth = max(0, depth - 1)
 			continue
 
 		# Standalone opening brace (K&R / Allman style on its own line)
 		if stripped == '{':
 			depth += 1
+			block_stack.append('other')
 			continue
 
-		# Line ending with { — block opener (e.g. `def foo():` already has :,
-		# or `if (__x > 0)` needs one appended)
+		# Line ending with { — block opener
 		if stripped.endswith('{'):
 			content = stripped[:-1].rstrip()
+			content = _maybe_inject_self(content)
 			if not content.endswith(':'):
 				content += ':'
 			result.append(_BRACE_INDENT * depth + content)
 			depth += 1
+			is_class = bool(re.match(r'^class\b', content.strip()))
+			block_stack.append('class' if is_class else 'other')
 			continue
 
 		# Colon-style block closers: end / endif / endforeach / …
 		if _re_brace_block_close.match(stripped):
+			if block_stack:
+				block_stack.pop()
 			depth = max(0, depth - 1)
 			continue
 
-		# elif / else / except / finally — same-level transition
+		# elif / else / except / finally — same-level transition.
+		# Brace-style (ends with {): the preceding } already decremented depth,
+		#   so we emit at the current depth and push for the new block.
+		# Colon-style (ends with : or nothing): depth must be decremented here.
 		if stripped.startswith(('elif ', 'else', 'except', 'finally')):
-			depth = max(0, depth - 1)
-			result.append(_BRACE_INDENT * depth + stripped)
-			depth += 1
+			if stripped.endswith('{'):
+				content = stripped[:-1].rstrip()
+				if not content.endswith(':'):
+					content += ':'
+				result.append(_BRACE_INDENT * depth + content)
+				depth += 1
+				block_stack.append('other')
+			else:
+				# Colon-style: the if-body block is still on the stack
+				if block_stack:
+					block_stack.pop()
+				depth = max(0, depth - 1)
+				result.append(_BRACE_INDENT * depth + stripped)
+				depth += 1
+				block_stack.append('other')
 			continue
 
 		# Colon-style block openers: if ...:  /  for ...:  /  def ...:  / …
 		if _re_brace_block_open.match(stripped):
 			result.append(_BRACE_INDENT * depth + stripped)
 			depth += 1
+			is_class = bool(re.match(r'^class\b', stripped.strip()))
+			block_stack.append('class' if is_class else 'other')
 			continue
 
 		result.append(_BRACE_INDENT * depth + stripped)
@@ -342,20 +431,66 @@ def _apply_php_concat(code: str) -> str:
 
 
 def _php_expr(expr: str) -> str:
-	"""Convert a PHP iterable expression to Python (used in foreach)."""
+	"""Convert a PHP iterable expression to Python (used in foreach).
+
+	$this->attr  ->  self.attr   (handled before the general $var rule)
+	other ->     ->  .           (method-chain dot)
+	$var         ->  __var
+	new Foo(     ->  Foo(
+	"""
 	expr = expr.strip()
 	expr = _re_new.sub(r'\1(', expr)
+	# $this-> must be converted before the general $var rule so that $this
+	# doesn't become __this and then miss the -> -> . replacement.
+	expr = _re_this_arrow.sub('self.', expr)
+	expr = _re_this_bare.sub('self', expr)
 	expr = expr.replace('->', '.')
 	expr = _re_var.sub(r'__\1', expr)
 	return expr
 
 
 def php_to_python(code: str) -> str:
+	# -1. Strip /* ... */ block comments (may be multi-line inside one PHP block).
+	code = _re_block_comment.sub('', code)
 	# 0. String interpolation: "Hello $name" -> f"Hello {__name}"
 	#    Must run first so $vars inside double-quoted strings are handled before
 	#    the global $var->__var substitution (which skips string contents).
 	code = _php_string_interpolation(code)
-	# 1. foreach — before $var so we still see $ in iterable expression
+	# 0a. PHP class / OOP pre-processing (before foreach / $var transforms)
+	#   Strip visibility / modifier keywords before function or class keywords
+	code = _sub_outside_strings(_re_visibility, '', code)
+	#   Strip 'static' directly before 'function'
+	code = _sub_outside_strings(_re_static_func, '', code)
+	#   class Foo extends Bar  ->  class Foo(Bar)
+	code = _sub_outside_strings(_re_class_extends, r'class \1(\2)', code)
+	#   else if  ->  elif
+	code = _sub_outside_strings(_re_else_if, 'elif', code)
+	#   function __construct  ->  function __init__
+	code = _sub_outside_strings(_re_construct, 'function __init__', code)
+	# 0b. PHP logical operators  &&  ||  !  ->  and  or  not
+	#     (safe pre-concat: no dots introduced)
+	code = _sub_outside_strings(_re_php_and, ' and ', code)
+	code = _sub_outside_strings(_re_php_or,  ' or ', code)
+	code = _sub_outside_strings(_re_php_not, 'not ', code)
+	# 0c. const NAME = val  ->  NAME = val
+	code = re.sub(_re_const, '', code)
+	# 4a. PHP concatenation assignment .= -> +=  (before the bare-dot step)
+	code = _sub_outside_strings(_re_concat_assign, '+=', code)
+	# 4b. Normalize echo(expr) -> echo expr so the concat step below can process it.
+	#     In PHP, echo(expr) is echo applied to a parenthesised expression; the parens
+	#     do not make it a function call.  We strip them here so _apply_php_concat sees
+	#     the naked expression and can convert any . chains inside it.
+	code = re.sub(r'^(\s*)echo\s*\((.+)\)\s*;?\s*$', r'\1echo \2', code, flags=re.MULTILINE)
+	# 4c. PHP string concatenation: $a . $b -> _cat($a, $b)
+	#     MUST run before foreach (step 1), because _php_expr introduces dots (via
+	#     -> -> .) that _apply_php_concat would otherwise misidentify as concat.
+	#     foreach header parens keep the iterable expression at depth > 0, so dots
+	#     inside it are invisible to _apply_php_concat at this stage.
+	code = _apply_php_concat(code)
+	# 4d. PHP use statement -> Python import (after concat: backslash-paths survive concat;
+	#     the resulting dot-paths must not be present when _apply_php_concat runs)
+	code = _re_use.sub(_use_repl, code)
+	# 1. foreach — after _apply_php_concat so dots from _php_expr are not re-processed
 	code = _re_foreach_kv.sub(
 		lambda m: f'for __{m.group(2)}, __{m.group(3)} in _items({_php_expr(m.group(1))}):',
 		code
@@ -372,21 +507,29 @@ def php_to_python(code: str) -> str:
 	code = _re_new.sub(r'\1(', code)
 	# 4. count( -> len(  outside strings
 	code = _sub_outside_strings(_re_count, 'len(', code)
-	# 4a. PHP concatenation assignment .= -> +=  (before the bare-dot step)
-	code = _sub_outside_strings(_re_concat_assign, '+=', code)
-	# 4b. Normalize echo(expr) -> echo expr so the concat step below can process it.
-	#     In PHP, echo(expr) is echo applied to a parenthesised expression; the parens
-	#     do not make it a function call.  We strip them here so _apply_php_concat sees
-	#     the naked expression and can convert any . chains inside it.
-	code = re.sub(r'^(\s*)echo\s*\((.+)\)\s*;?\s*$', r'\1echo \2', code, flags=re.MULTILINE)
-	# 4c. PHP string concatenation: $a . $b -> _cat($a, $b)
-	#     _cat coerces all args to str (PHP semantics); runs before -> is converted to .
-	code = _apply_php_concat(code)
-	# 4d. PHP use statement -> Python import (after concat: backslash-paths survive concat;
-	#     the resulting dot-paths must not be present when _apply_php_concat runs)
-	code = _re_use.sub(_use_repl, code)
 	# 5. -> to .  outside strings
 	code = _sub_outside_strings(re.compile(r'->'), '.', code)
+	# 5b. $this->  (now $this. after step 5) and standalone $this  ->  self
+	#     MUST be after _apply_php_concat so "self.attr" dots are not treated as
+	#     PHP concat.  Also after -> -> . so that "$this->x" -> "$this.x" -> "self.x".
+	code = _sub_outside_strings(_re_this_arrow, 'self.', code)
+	code = _sub_outside_strings(_re_this_bare,  'self',  code)
+	# 5c. parent::__construct  ->  super().__init__
+	#     MUST be before the :: -> . step below.
+	code = _sub_outside_strings(_re_parent_construct, 'super().__init__', code)
+	# 5d. ::  ->  .   (static / class access: Kind::CONST, ClassName::method)
+	#     MUST be after _apply_php_concat to avoid dots being treated as concat.
+	code = _sub_outside_strings(_re_double_colon, '.', code)
+	# 5e. PHP array append: $arr[] = val  ->  $arr.append(val)
+	#                        self.attr[] = val  ->  self.attr.append(val)
+	#     Applied directly (not via _sub_outside_strings) so that string-literal
+	#     RHS values are captured in full; trailing semicolons are stripped.
+	def _arr_append_repl_var(m: re.Match) -> str:
+		return f'${m.group(1)}.append({m.group(2).rstrip().rstrip(";")})'
+	def _arr_append_repl_self(m: re.Match) -> str:
+		return f'{m.group(1)}.append({m.group(2).rstrip().rstrip(";")})'
+	code = _re_arr_append_var.sub(_arr_append_repl_var, code)
+	code = _re_arr_append_self.sub(_arr_append_repl_self, code)
 	# 6. true/false/null  outside strings
 	code = _sub_outside_strings(_re_keywords, lambda m: _kw_map[m.group()], code)
 	# 7. // comments -> #  (outside strings only)
@@ -436,6 +579,10 @@ def php_to_python(code: str) -> str:
 	#     Applied when braces are present (i.e., function bodies or brace-style
 	#     if/for/while blocks).  Must run last so all keyword conversions are done.
 	if '{' in code or '}' in code:
+		# Normalise "} else {" and "} else if (…) {" onto separate lines so that
+		# _braces_to_indent can handle each token independently.
+		code = re.sub(r'\}\s*else\s+if\b', '}\nelse if', code)
+		code = re.sub(r'\}\s*else\s*\{', '}\nelse {', code)
 		code = _braces_to_indent(code)
 	return code
 
