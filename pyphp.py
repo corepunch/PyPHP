@@ -166,17 +166,41 @@ def _braces_to_indent(code: str) -> str:
 			result.append('')
 			continue
 
+		# Normalize "{:" at end of line — step 2 of php_to_python appends ':' to
+		# ensure block headers end with ':', but for single-line PHP tags like
+		# `foreach ($x as $v) {` step 1 already emits ':' and the '{' is left
+		# trailing; step 2 then appends another ':', giving e.g. `for ... :{:`.
+		# Strip the redundant ':' so the '{' is visible to the endswith('{') branch.
+		stripped = re.sub(r'\{\s*:$', '{', stripped)
+
 		# Track @staticmethod decorator so the following def skips self injection.
 		if stripped == '@staticmethod':
 			_next_staticmethod = True
 			result.append(_BRACE_INDENT * depth + stripped)
 			continue
 
+		# "} else {" / "} else:" / "} elseif (...) {" — the leading } closes the
+		# current brace block; strip it and fall through to handle the remainder.
+		# At depth 0 (cross-tag template style) we do NOT emit 'end' here because
+		# _tokens_to_python's else/elif transition already decrements the outer
+		# indent before emitting, making the implicit close redundant.
+		if stripped.startswith('}') and stripped not in ('}', '};'):
+			if depth > 0:
+				depth -= 1
+				if len(_class_stack) > 1:
+					_class_stack.pop()
+			stripped = stripped[1:].lstrip()
+
 		# Standalone closing brace — ends a block, not emitted
 		if stripped in ('}', '};'):
-			depth = max(0, depth - 1)
-			if len(_class_stack) > 1:
-				_class_stack.pop()
+			if depth > 0:
+				depth -= 1
+				if len(_class_stack) > 1:
+					_class_stack.pop()
+			else:
+				# Unmatched } at top level — pass through as a block-close signal
+				# so _tokens_to_python can decrement the outer indent.
+				result.append('end')
 			continue
 
 		# Standalone opening brace (K&R / Allman style on its own line)
@@ -530,7 +554,9 @@ def php_to_python(code: str) -> str:
 	)
 	#     vii. class Foo extends Bar -> class Foo(Bar)
 	code = _re_class_extends.sub(r'class \1(\2)', code)
-	# 1. foreach — before $var so we still see $ in iterable expression
+	# 1. PHP elseif -> Python elif (before step 2 which normalises block headers)
+	code = re.sub(r'\belseif\b', 'elif', code)
+	# foreach — before $var so we still see $ in iterable expression
 	code = _re_foreach_kv.sub(
 		lambda m: f'for __{m.group(2)}, __{m.group(3)} in _items({_php_expr(m.group(1))}):',
 		code
