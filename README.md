@@ -39,7 +39,12 @@ Hello, World!
 
 ## Examples
 
-### 1 — Basic variables and arithmetic
+### Basic variables and arithmetic
+
+<table>
+<tr><th>PHP</th><th>Output</th></tr>
+<tr>
+<td>
 
 ```php
 <?php $a = 10; $b = 3; ?>
@@ -47,15 +52,26 @@ sum:     <?= $a + $b ?>
 product: <?= $a * $b ?>
 ```
 
-Output:
+</td>
+<td>
+
 ```
 sum:     13
 product: 30
 ```
 
+</td>
+</tr>
+</table>
+
 ---
 
-### 2 — Iterating a list
+### Iterating a list
+
+<table>
+<tr><th>PHP</th><th>Output</th></tr>
+<tr>
+<td>
 
 ```php
 <?php $fruits = ["apple", "banana", "cherry"]; ?>
@@ -64,16 +80,27 @@ product: 30
 <?php endforeach ?>
 ```
 
-Output:
+</td>
+<td>
+
 ```
 - apple
 - banana
 - cherry
 ```
 
+</td>
+</tr>
+</table>
+
 ---
 
-### 3 — Conditionals
+### Conditionals
+
+<table>
+<tr><th>PHP</th><th>Output</th></tr>
+<tr>
+<td>
 
 ```php
 <?php $score = 85; ?>
@@ -86,9 +113,20 @@ Grade: C
 <?php endif ?>
 ```
 
+</td>
+<td>
+
+```
+Grade: B
+```
+
+</td>
+</tr>
+</table>
+
 ---
 
-### 4 — Generating a C header from an XML model
+### Generating a C header from an XML model
 
 This is the canonical use case.  Suppose `model.xml` describes a set of structs:
 
@@ -161,7 +199,12 @@ struct Rect {
 
 ---
 
-### 5 — Generating an HTML table
+### Generating an HTML table
+
+<table>
+<tr><th>PHP</th><th>Output</th></tr>
+<tr>
+<td>
 
 ```php
 <?php $rows = [["Alice", 30], ["Bob", 25], ["Carol", 35]]; ?>
@@ -173,9 +216,30 @@ struct Rect {
 </table>
 ```
 
+</td>
+<td>
+
+```html
+<table>
+  <tr><th>Name</th><th>Age</th></tr>
+  <tr><td>Alice</td><td>30</td></tr>
+  <tr><td>Bob</td><td>25</td></tr>
+  <tr><td>Carol</td><td>35</td></tr>
+</table>
+```
+
+</td>
+</tr>
+</table>
+
 ---
 
-### 6 — String interpolation and concatenation
+### String interpolation and concatenation
+
+<table>
+<tr><th>PHP</th><th>Output</th></tr>
+<tr>
+<td>
 
 ```php
 <?php $first = "Ada"; $last = "Lovelace"; ?>
@@ -184,16 +248,27 @@ struct Rect {
 <?= "Full name: {$first} {$last}" ?>
 ```
 
-Output:
+</td>
+<td>
+
 ```
 Hello, Ada!
 Ada Lovelace
 Full name: Ada Lovelace
 ```
 
+</td>
+</tr>
+</table>
+
 ---
 
-### 7 — Type casting and `list()` unpacking
+### Type casting and `list()` unpacking
+
+<table>
+<tr><th>PHP</th><th>Output</th></tr>
+<tr>
+<td>
 
 ```php
 <?php $parts = ["42", "3.14"]; ?>
@@ -202,15 +277,26 @@ int:   <?= (int)$n ?>
 float: <?= (float)$f ?>
 ```
 
-Output:
+</td>
+<td>
+
 ```
 int:   42
 float: 3.14
 ```
 
+</td>
+</tr>
+</table>
+
 ---
 
-### 8 — PHP string and array functions
+### PHP string and array functions
+
+<table>
+<tr><th>PHP</th><th>Output</th></tr>
+<tr>
+<td>
 
 ```php
 <?php $tags = ["PHP", "Python", "Ruby"]; ?>
@@ -220,16 +306,63 @@ float: 3.14
 <?= count(explode(",", $csv)) ?>
 ```
 
-Output:
+</td>
+<td>
+
 ```
 PHP, Python, Ruby
 php | python | ruby
 3
 ```
 
+</td>
+</tr>
+</table>
+
 ---
 
-### 9 — Function definitions
+### Classes and inheritance
+
+<table>
+<tr><th>PHP</th><th>Output</th></tr>
+<tr>
+<td>
+
+```php
+<?php
+class Animal {
+    public $name;
+    public function __construct($name) {
+        $this->name = $name;
+    }
+    public function speak() {
+        return $this->name . " says hello";
+    }
+}
+class Dog extends Animal {
+    public function speak() {
+        return $this->name . " says Woof!";
+    }
+}
+$d = new Dog("Rex");
+?>
+<?= $d->speak() ?>
+```
+
+</td>
+<td>
+
+```
+Rex says Woof!
+```
+
+</td>
+</tr>
+</table>
+
+---
+
+### Function definitions
 
 ```php
 <?php
@@ -315,6 +448,15 @@ ctx = Context(
 | Type casting | `(int)$x`, `(float)$x`, `(string)$x`, `(bool)$x` | Mapped to `int()`, `float()`, `str()`, `bool()` |
 | `list()` assignment | `list($a, $b) = $arr` | Mapped to Python tuple unpacking |
 | Function definitions | `function foo($a, $b) { ... }` | Named functions with parameters; body uses `{}`; supports `return` and `echo` |
+| Class definition | `class Foo { ... }` | Mapped to `class Foo:` with body |
+| Class inheritance | `class Foo extends Bar { ... }` | Mapped to `class Foo(Bar):` |
+| Constructor | `function __construct(...)` | Mapped to `def __init__(...)` |
+| Instance property / method | `$this->prop`, `$this->method()` | Mapped to `self.prop` / `self.method()` |
+| Parent method call | `parent::method(args)` | Mapped to `super().method(args)` |
+| Static method definition | `public static function foo()` | Decorated with `@staticmethod` |
+| Static method call | `ClassName::method()` | Mapped to `ClassName.method()` |
+| Access modifiers | `public`, `private`, `protected` | Removed (not applicable in Python) |
+| Namespace import | `use A\B\C;` / `use A\B\C as D;` | Mapped to `import A.B.C as C` / `import A.B.C as D` |
 | PHP string functions | `strlen()`, `strtolower()`, `strtoupper()`, `trim()`, `str_replace()`, `substr()`, `strpos()`, `sprintf()`, `ucfirst()`, `ucwords()`, `str_repeat()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `number_format()`, `nl2br()`, `htmlspecialchars()`, `strip_tags()`, `str_split()`, … | Available directly in templates |
 | PHP array functions | `implode()`, `explode()`, `in_array()`, `array_merge()`, `array_keys()`, `array_values()`, `array_map()`, `array_filter()`, `array_reverse()`, `array_unique()`, `array_push()`, `array_pop()`, `array_shift()`, `array_slice()`, `array_chunk()`, `array_sum()`, `array_flip()`, `array_search()`, `sort()`, `rsort()`, … | Available directly in templates |
 | Math functions | `abs()`, `ceil()`, `floor()`, `round()`, `pow()`, `sqrt()`, `max()`, `min()`, `rand()` | Available directly in templates |
@@ -331,7 +473,6 @@ The following PHP features are not currently translated and are on the roadmap:
 |---|---|---|
 | PHP ternary operator | `$a ? $b : $c` | ⏳ Planned (use Python `$b if $a else $c` for now) |
 | `switch` / `case` | `switch ($x) { case 1: ... }` | ⏳ Planned |
-| Class definitions | `class Foo { ... }` | ⏳ Planned |
 
 > **Tip:** Because the code inside `<?php ?>` tags is executed as Python, you can use any Python expression or built-in directly — `len()`, `range()`, `sorted()`, list comprehensions, etc.
 
