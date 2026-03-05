@@ -13,8 +13,8 @@
 <?= implode(",", $rev) ?>
 <?php sort($nums); ?>
 <?= implode(",", $nums) ?>
-<?php $d = {"a": 1, "b": 2, "c": 3}; ?>
-<?= implode(",", array_keys($d)) ?>
+<?php $keys = array_keys(["x", "y", "z"]); ?>
+<?= implode(",", $keys) ?>
 <?php $merged = array_merge([1, 2], [3, 4]); ?>
 <?= implode(",", $merged) ?>
 <?php $sliced = array_slice([10, 20, 30, 40, 50], 1, 3); ?>

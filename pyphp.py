@@ -656,10 +656,8 @@ def render(source: str, ctx: Context) -> str:
 
 	import sys as _sys
 	scope = dict(ctx.vars)
-	# PHP standard-library functions available in every template
-	scope.update(_PHP_BUILTINS)
-	for k, v in _PHP_BUILTINS.items():
-		scope[f'__{k}'] = v
+	# PHP standard-library functions: expose as both plain name and __name in scope
+	scope.update(_PHP_BUILTINS | {f'__{k}': v for k, v in _PHP_BUILTINS.items()})
 	# expose sys attributes directly: $argv, $path, $version, etc.
 	for k in dir(_sys):
 		if not k.startswith('__'):
