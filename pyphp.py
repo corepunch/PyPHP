@@ -211,6 +211,9 @@ def _braces_to_indent(code: str) -> str:
 				# Unmatched closer at the top level — pass it through so
 				# _tokens_to_python can use it to decrement the outer indent.
 				result.append(stripped)
+			depth = max(0, depth - 1)
+			if len(_class_stack) > 1:
+				_class_stack.pop()
 			continue
 
 		# elif / else / except / finally — same-level transition
