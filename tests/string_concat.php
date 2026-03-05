@@ -1,8 +1,11 @@
 <?php $first = "Hello"; $last = "World"; ?>
-<?= $first . " " . $last ?>
+<?php $full = $first . " " . $last; ?>
+<?php assert($full == "Hello World") ?>
 <?php $a = "foo"; $b = "bar"; ?>
-<?= $a . $b ?>
+<?php $ab = $a . $b; ?>
+<?php assert($ab == "foobar") ?>
 <?php $s = "count="; $n = 5; ?>
-<?= $s . $n ?>
+<?php $sn = $s . $n; ?>
+<?php assert($sn == "count=5") ?>
 <?php $x = "abc"; $x .= "def"; ?>
-<?= $x ?>
+<?php assert($x == "abcdef") ?>

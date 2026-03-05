@@ -1,9 +1,9 @@
 <?php $name = "World"; ?>
-<?= "Hello, $name!" ?>
+<?php assert("Hello, $name!" == "Hello, World!") ?>
 <?php $count = 3; ?>
-<?= "Count: $count items" ?>
+<?php assert("Count: $count items" == "Count: 3 items") ?>
 <?php $arr = ["a", "b", "c"]; ?>
-<?= "First: $arr[0]" ?>
+<?php assert("First: $arr[0]" == "First: a") ?>
 <?php $x = 42; ?>
-<?= "x is {$x}" ?>
-<?= 'No $interpolation here' ?>
+<?php assert("x is {$x}" == "x is 42") ?>
+<?php assert('No $interpolation here' == 'No $interpolation here') ?>

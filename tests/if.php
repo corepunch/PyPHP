@@ -1,6 +1,6 @@
 <?php $x = 42; ?>
 <?php if ($x > 10): ?>
-big
+<?php assert(true) ?>
 <?php else: ?>
-small
+<?php assert(false) ?>
 <?php endif ?>
