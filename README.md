@@ -41,7 +41,7 @@ Hello, World!
 
 ### Basic variables and arithmetic
 
-<table>
+<table style="width:100%">
 <tr><th>PHP</th><th>Output</th></tr>
 <tr>
 <td>
@@ -68,7 +68,7 @@ product: 30
 
 ### Iterating a list
 
-<table>
+<table style="width:100%">
 <tr><th>PHP</th><th>Output</th></tr>
 <tr>
 <td>
@@ -97,7 +97,7 @@ product: 30
 
 ### Conditionals
 
-<table>
+<table style="width:100%">
 <tr><th>PHP</th><th>Output</th></tr>
 <tr>
 <td>
@@ -201,7 +201,7 @@ struct Rect {
 
 ### Generating an HTML table
 
-<table>
+<table style="width:100%">
 <tr><th>PHP</th><th>Output</th></tr>
 <tr>
 <td>
@@ -236,7 +236,7 @@ struct Rect {
 
 ### String interpolation and concatenation
 
-<table>
+<table style="width:100%">
 <tr><th>PHP</th><th>Output</th></tr>
 <tr>
 <td>
@@ -265,7 +265,7 @@ Full name: Ada Lovelace
 
 ### Type casting and `list()` unpacking
 
-<table>
+<table style="width:100%">
 <tr><th>PHP</th><th>Output</th></tr>
 <tr>
 <td>
@@ -293,7 +293,7 @@ float: 3.14
 
 ### PHP string and array functions
 
-<table>
+<table style="width:100%">
 <tr><th>PHP</th><th>Output</th></tr>
 <tr>
 <td>
@@ -323,7 +323,7 @@ php | python | ruby
 
 ### Classes and inheritance
 
-<table>
+<table style="width:100%">
 <tr><th>PHP</th><th>Output</th></tr>
 <tr>
 <td>
