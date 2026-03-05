@@ -17,6 +17,8 @@ PHP conversions applied inside <?php ?> and <?= ?> tags:
 	$a . $b					->  __a + __b  (concatenation)
 	(int)$x					->  int(__x)   (type cast)
 	list($a, $b) = $arr		->  __a, __b = __arr
+	use A\\B\\C;			   ->  import A.B.C as C  (namespace import)
+	use A\\B\\C as D;		  ->  import A.B.C as D
 """
 
 import math
@@ -37,6 +39,20 @@ _re_count	  = re.compile(r'\bcount\s*\(')
 _re_comment	= re.compile(r'(?<!:)//(.*)$', re.MULTILINE)
 _re_echo	   = re.compile(r'^\s*echo\s+')
 _re_end		= re.compile(r'\b(endif|endforeach|endwhile|endfor)\b')
+# PHP 'use' statements (namespace imports and trait uses) -> Python import.
+# use A\B\C;        ->  import A.B.C as C
+# use A\B\C as D;   ->  import A.B.C as D
+_re_use		= re.compile(r'^\s*use\s+([\w\\]+)(?:\s+as\s+(\w+))?\s*;\s*$', re.MULTILINE)
+
+
+def _use_repl(m: re.Match) -> str:
+	"""Convert a PHP use statement to a Python import."""
+	namespace = m.group(1)          # e.g. Some\Namespace\Helper
+	alias     = m.group(2)          # e.g. "D" or None
+	py_path   = namespace.replace('\\', '.')         # e.g. Some.Namespace.Helper
+	if alias is None:
+		alias = namespace.split('\\')[-1]            # default: last component
+	return f'import {py_path} as {alias}'
 _re_var		= re.compile(r'\$([A-Za-z_]\w*)')
 _re_keywords   = re.compile(r'\b(true|false|null)\b')
 _kw_map		= {'true': 'True', 'false': 'False', 'null': 'None'}
@@ -253,6 +269,9 @@ def php_to_python(code: str) -> str:
 	# 4b. PHP string concatenation: $a . $b -> _cat($a, $b)
 	#     _cat coerces all args to str (PHP semantics); runs before -> is converted to .
 	code = _apply_php_concat(code)
+	# 4c. PHP use statement -> Python import (after concat: backslash-paths survive concat;
+	#     the resulting dot-paths must not be present when _apply_php_concat runs)
+	code = _re_use.sub(_use_repl, code)
 	# 5. -> to .  outside strings
 	code = _sub_outside_strings(re.compile(r'->'), '.', code)
 	# 6. true/false/null  outside strings
