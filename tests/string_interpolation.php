@@ -1,0 +1,9 @@
+<?php $name = "World"; ?>
+<?= "Hello, $name!" ?>
+<?php $count = 3; ?>
+<?= "Count: $count items" ?>
+<?php $arr = ["a", "b", "c"]; ?>
+<?= "First: $arr[0]" ?>
+<?php $x = 42; ?>
+<?= "x is {$x}" ?>
+<?= 'No $interpolation here' ?>
