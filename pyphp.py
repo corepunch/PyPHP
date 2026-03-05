@@ -292,7 +292,7 @@ if __name__ == '__main__':
 		k, _, v = arg.partition('=')
 		vars_[k.strip()] = v.strip()
 	ctx = Context(vars=vars_)
-	print(render_file(template_path, ctx))
+	sys.stdout.write(render_file(template_path, ctx))
 
 
 # ── xml element wrapper ───────────────────────────────────────────────────────

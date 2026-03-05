@@ -1,5 +1,3 @@
-<?php
-$name = "PHP";
-$version = 8;
-echo "Hello from $name $version\n";
-?>
+<?php $name = "PHP"; ?>
+<?php $version = 8; ?>
+<?= $name ?> <?= $version ?>
