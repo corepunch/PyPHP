@@ -37,6 +37,9 @@ _re_count	  = re.compile(r'\bcount\s*\(')
 _re_comment	= re.compile(r'(?<!:)//(.*)$', re.MULTILINE)
 _re_echo	   = re.compile(r'^\s*echo\s+')
 _re_end		= re.compile(r'\b(endif|endforeach|endwhile|endfor)\b')
+# PHP 'use' statements (namespace imports and trait uses) — silently dropped.
+# Neither PHP namespaces nor traits have a Python equivalent in this runtime.
+_re_use		= re.compile(r'^\s*use\s+[\w\\]+(?:\s+as\s+\w+)?\s*;\s*$', re.MULTILINE)
 _re_var		= re.compile(r'\$([A-Za-z_]\w*)')
 _re_keywords   = re.compile(r'\b(true|false|null)\b')
 _kw_map		= {'true': 'True', 'false': 'False', 'null': 'None'}
@@ -227,6 +230,8 @@ def _php_expr(expr: str) -> str:
 
 
 def php_to_python(code: str) -> str:
+	# -1. Strip PHP 'use' namespace/trait statements — they have no Python equivalent
+	code = _re_use.sub('', code)
 	# 0. String interpolation: "Hello $name" -> f"Hello {__name}"
 	#    Must run first so $vars inside double-quoted strings are handled before
 	#    the global $var->__var substitution (which skips string contents).
