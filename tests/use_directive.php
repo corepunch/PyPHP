@@ -1,4 +1,4 @@
-<?php use Some\Namespace\Helper; ?>
-<?php use Another\Namespace\Tool as T; ?>
-<?php $value = 7; ?>
-<?= $value ?>
+<?php use json; ?>
+<?php use os\path as ospath; ?>
+<?php $result = 42; ?>
+<?= $result ?>
