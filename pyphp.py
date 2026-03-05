@@ -32,8 +32,8 @@ from typing import Any, Callable
 
 # ── php-to-python preprocessor ────────────────────────────────────────────────
 
-_re_foreach_kv = re.compile(r'foreach\s*\((.+?)\s+as\s+\$(\w+)\s*=>\s*\$(\w+)\s*\)\s*:?')
-_re_foreach_v  = re.compile(r'foreach\s*\((.+?)\s+as\s+\$(\w+)\s*\)\s*:?')
+_re_foreach_kv = re.compile(r'foreach\s*\((.+?)\s+as\s+\$(\w+)\s*=>\s*\$(\w+)\s*\)[ \t]*:?')
+_re_foreach_v  = re.compile(r'foreach\s*\((.+?)\s+as\s+\$(\w+)\s*\)[ \t]*:?')
 _re_new		= re.compile(r'\bnew\s+([A-Za-z_]\w*)\s*\(')
 _re_count	  = re.compile(r'\bcount\s*\(')
 _re_comment	= re.compile(r'(?<!:)//(.*)$', re.MULTILINE)
@@ -374,10 +374,15 @@ def php_to_python(code: str) -> str:
 	code = _sub_outside_strings(_re_count, 'len(', code)
 	# 4a. PHP concatenation assignment .= -> +=  (before the bare-dot step)
 	code = _sub_outside_strings(_re_concat_assign, '+=', code)
-	# 4b. PHP string concatenation: $a . $b -> _cat($a, $b)
+	# 4b. Normalize echo(expr) -> echo expr so the concat step below can process it.
+	#     In PHP, echo(expr) is echo applied to a parenthesised expression; the parens
+	#     do not make it a function call.  We strip them here so _apply_php_concat sees
+	#     the naked expression and can convert any . chains inside it.
+	code = re.sub(r'^(\s*)echo\s*\((.+)\)\s*;?\s*$', r'\1echo \2', code, flags=re.MULTILINE)
+	# 4c. PHP string concatenation: $a . $b -> _cat($a, $b)
 	#     _cat coerces all args to str (PHP semantics); runs before -> is converted to .
 	code = _apply_php_concat(code)
-	# 4c. PHP use statement -> Python import (after concat: backslash-paths survive concat;
+	# 4d. PHP use statement -> Python import (after concat: backslash-paths survive concat;
 	#     the resulting dot-paths must not be present when _apply_php_concat runs)
 	code = _re_use.sub(_use_repl, code)
 	# 5. -> to .  outside strings
@@ -414,7 +419,7 @@ def php_to_python(code: str) -> str:
 	#    This replaces the old "strip echo" behaviour and makes echo produce output
 	#    everywhere, including inside function bodies.
 	code = re.sub(
-		r'^\s*echo\s+(.+?)[ \t]*;?[ \t]*$',
+		r'^\s*echo\s*(.+?)[ \t]*;?[ \t]*$',
 		lambda m: f'_out.append(str({m.group(1).strip()}))',
 		code,
 		flags=re.MULTILINE,
