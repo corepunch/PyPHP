@@ -16,12 +16,12 @@ jobs:
 
       - name: Run tests
         run: |
-          for phps_file in tests/*.phps; do
-            if python pyphp.py "$phps_file" > /dev/null 2>&1; then
-              echo "PASS: $phps_file"
+          for php_file in tests/*.php; do
+            if python pyphp.py "$php_file" > /dev/null 2>&1; then
+              echo "PASS: $php_file"
             else
-              echo "FAIL: $phps_file"
-              python pyphp.py "$phps_file"
+              echo "FAIL: $php_file"
+              python pyphp.py "$php_file"
               exit 1
             fi
           done
