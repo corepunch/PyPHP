@@ -16,13 +16,12 @@ jobs:
 
       - name: Run tests
         run: |
-          for php_file in tests/*.php; do
-            expected="${php_file%.php}.expected"
-            if diff <(python pyphp.py "$php_file") "$expected" > /dev/null 2>&1; then
-              echo "PASS: $php_file"
+          for phps_file in tests/*.phps; do
+            if python pyphp.py "$phps_file" > /dev/null 2>&1; then
+              echo "PASS: $phps_file"
             else
-              echo "FAIL: $php_file"
-              diff <(python pyphp.py "$php_file") "$expected"
+              echo "FAIL: $phps_file"
+              python pyphp.py "$phps_file"
               exit 1
             fi
           done

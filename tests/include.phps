@@ -1,6 +1,6 @@
 <?php require "tests/greet_helper.py"; ?>
-<?= $greeting ?>, World!
+<?php assert($greeting == "Hi there") ?>
 <?php require_once "tests/greet_helper.py"; ?>
-<?= $greeting ?> again
+<?php assert($greeting == "Hi there") ?>
 <?php include "tests/greet_helper.py"; ?>
-<?= $greeting ?> once more
+<?php assert($greeting == "Hi there") ?>

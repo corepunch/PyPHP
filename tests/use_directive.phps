@@ -1,4 +1,4 @@
 <?php use json; ?>
 <?php use os\path as ospath; ?>
 <?php $result = 42; ?>
-<?= $result ?>
+<?php assert($result == 42) ?>
