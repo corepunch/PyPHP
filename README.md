@@ -39,10 +39,10 @@ Hello, World!
 
 ## Examples
 
-### Basic variables and arithmetic
-
-<table style="width:100%">
+<table>
 <tr><th>PHP</th><th>Output</th></tr>
+
+<tr><td colspan="2"><strong>Basic variables and arithmetic</strong></td></tr>
 <tr>
 <td>
 
@@ -62,14 +62,8 @@ product: 30
 
 </td>
 </tr>
-</table>
 
----
-
-### Iterating a list
-
-<table style="width:100%">
-<tr><th>PHP</th><th>Output</th></tr>
+<tr><td colspan="2"><strong>Iterating a list</strong></td></tr>
 <tr>
 <td>
 
@@ -91,14 +85,8 @@ product: 30
 
 </td>
 </tr>
-</table>
 
----
-
-### Conditionals
-
-<table style="width:100%">
-<tr><th>PHP</th><th>Output</th></tr>
+<tr><td colspan="2"><strong>Conditionals</strong></td></tr>
 <tr>
 <td>
 
@@ -122,6 +110,140 @@ Grade: B
 
 </td>
 </tr>
+
+<tr><td colspan="2"><strong>Generating an HTML table</strong></td></tr>
+<tr>
+<td>
+
+```php
+<?php $rows = [["Alice", 30], ["Bob", 25], ["Carol", 35]]; ?>
+<table>
+  <tr><th>Name</th><th>Age</th></tr>
+<?php foreach ($rows as $i => $row): ?>
+  <tr><td><?= $row[0] ?></td><td><?= $row[1] ?></td></tr>
+<?php endforeach ?>
+</table>
+```
+
+</td>
+<td>
+
+```html
+<table>
+  <tr><th>Name</th><th>Age</th></tr>
+  <tr><td>Alice</td><td>30</td></tr>
+  <tr><td>Bob</td><td>25</td></tr>
+  <tr><td>Carol</td><td>35</td></tr>
+</table>
+```
+
+</td>
+</tr>
+
+<tr><td colspan="2"><strong>String interpolation and concatenation</strong></td></tr>
+<tr>
+<td>
+
+```php
+<?php $first = "Ada"; $last = "Lovelace"; ?>
+<?= "Hello, $first!" ?>
+<?= $first . " " . $last ?>
+<?= "Full name: {$first} {$last}" ?>
+```
+
+</td>
+<td>
+
+```
+Hello, Ada!
+Ada Lovelace
+Full name: Ada Lovelace
+```
+
+</td>
+</tr>
+
+<tr><td colspan="2"><strong>Type casting and <code>list()</code> unpacking</strong></td></tr>
+<tr>
+<td>
+
+```php
+<?php $parts = ["42", "3.14"]; ?>
+<?php list($n, $f) = $parts; ?>
+int:   <?= (int)$n ?>
+float: <?= (float)$f ?>
+```
+
+</td>
+<td>
+
+```
+int:   42
+float: 3.14
+```
+
+</td>
+</tr>
+
+<tr><td colspan="2"><strong>PHP string and array functions</strong></td></tr>
+<tr>
+<td>
+
+```php
+<?php $tags = ["PHP", "Python", "Ruby"]; ?>
+<?= implode(", ", $tags) ?>
+<?= strtolower(implode(" | ", $tags)) ?>
+<?php $csv = "one,two,three"; ?>
+<?= count(explode(",", $csv)) ?>
+```
+
+</td>
+<td>
+
+```
+PHP, Python, Ruby
+php | python | ruby
+3
+```
+
+</td>
+</tr>
+
+<tr><td colspan="2"><strong>Classes and inheritance</strong></td></tr>
+<tr>
+<td>
+
+```php
+<?php
+class Animal {
+    public $name;
+    public function __construct($name) {
+        $this->name = $name;
+    }
+    public function speak() {
+        return $this->name . " says hello";
+    }
+}
+class Dog extends Animal {
+    public function speak() {
+        return $this->name . " says Woof!";
+    }
+}
+$d = new Dog("Rex");
+?>
+<?= $d->speak() ?>
+```
+
+</td>
+<td>
+
+```
+Rex says Woof!
+```
+
+</td>
+</tr>
+
 </table>
 
 ---
@@ -196,169 +318,6 @@ struct Rect {
     Point size;
 };
 ```
-
----
-
-### Generating an HTML table
-
-<table style="width:100%">
-<tr><th>PHP</th><th>Output</th></tr>
-<tr>
-<td>
-
-```php
-<?php $rows = [["Alice", 30], ["Bob", 25], ["Carol", 35]]; ?>
-<table>
-  <tr><th>Name</th><th>Age</th></tr>
-<?php foreach ($rows as $i => $row): ?>
-  <tr><td><?= $row[0] ?></td><td><?= $row[1] ?></td></tr>
-<?php endforeach ?>
-</table>
-```
-
-</td>
-<td>
-
-```html
-<table>
-  <tr><th>Name</th><th>Age</th></tr>
-  <tr><td>Alice</td><td>30</td></tr>
-  <tr><td>Bob</td><td>25</td></tr>
-  <tr><td>Carol</td><td>35</td></tr>
-</table>
-```
-
-</td>
-</tr>
-</table>
-
----
-
-### String interpolation and concatenation
-
-<table style="width:100%">
-<tr><th>PHP</th><th>Output</th></tr>
-<tr>
-<td>
-
-```php
-<?php $first = "Ada"; $last = "Lovelace"; ?>
-<?= "Hello, $first!" ?>
-<?= $first . " " . $last ?>
-<?= "Full name: {$first} {$last}" ?>
-```
-
-</td>
-<td>
-
-```
-Hello, Ada!
-Ada Lovelace
-Full name: Ada Lovelace
-```
-
-</td>
-</tr>
-</table>
-
----
-
-### Type casting and `list()` unpacking
-
-<table style="width:100%">
-<tr><th>PHP</th><th>Output</th></tr>
-<tr>
-<td>
-
-```php
-<?php $parts = ["42", "3.14"]; ?>
-<?php list($n, $f) = $parts; ?>
-int:   <?= (int)$n ?>
-float: <?= (float)$f ?>
-```
-
-</td>
-<td>
-
-```
-int:   42
-float: 3.14
-```
-
-</td>
-</tr>
-</table>
-
----
-
-### PHP string and array functions
-
-<table style="width:100%">
-<tr><th>PHP</th><th>Output</th></tr>
-<tr>
-<td>
-
-```php
-<?php $tags = ["PHP", "Python", "Ruby"]; ?>
-<?= implode(", ", $tags) ?>
-<?= strtolower(implode(" | ", $tags)) ?>
-<?php $csv = "one,two,three"; ?>
-<?= count(explode(",", $csv)) ?>
-```
-
-</td>
-<td>
-
-```
-PHP, Python, Ruby
-php | python | ruby
-3
-```
-
-</td>
-</tr>
-</table>
-
----
-
-### Classes and inheritance
-
-<table style="width:100%">
-<tr><th>PHP</th><th>Output</th></tr>
-<tr>
-<td>
-
-```php
-<?php
-class Animal {
-    public $name;
-    public function __construct($name) {
-        $this->name = $name;
-    }
-    public function speak() {
-        return $this->name . " says hello";
-    }
-}
-class Dog extends Animal {
-    public function speak() {
-        return $this->name . " says Woof!";
-    }
-}
-$d = new Dog("Rex");
-?>
-<?= $d->speak() ?>
-```
-
-</td>
-<td>
-
-```
-Rex says Woof!
-```
-
-</td>
-</tr>
-</table>
 
 ---
 
