@@ -1,4 +1,4 @@
-PYTHON ?= python3
+PYTHON ?= $(shell command -v python3 || command -v python)
 TEST_DIR := tests
 
 .PHONY: test
