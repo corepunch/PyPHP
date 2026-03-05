@@ -650,7 +650,7 @@ def _tokens_to_python(tokens: list) -> str:
 
 # ── renderer ──────────────────────────────────────────────────────────────────
 
-def render(source: str, ctx: Context) -> str:
+def render(source: str, ctx: Context, filename: str = '<template>') -> str:
 	tokens = tokenize(source)
 	script = _tokens_to_python(tokens)
 
@@ -698,7 +698,7 @@ def render(source: str, ctx: Context) -> str:
 	scope['_require'] = _require
 
 	try:
-		exec(script, scope)
+		exec(compile(script, filename, 'exec'), scope)
 	except Exception as e:
 		numbered = '\n'.join(f'{i+1:4}: {l}' for i, l in enumerate(script.splitlines()))
 		raise RuntimeError(
@@ -709,8 +709,9 @@ def render(source: str, ctx: Context) -> str:
 
 
 def render_file(path: str | Path, ctx: Context) -> str:
-	source = Path(path).read_text(encoding='utf-8')
-	return render(source, ctx)
+	path = Path(path)
+	source = path.read_text(encoding='utf-8')
+	return render(source, ctx, filename=str(path))
 
 
 # ── cli ───────────────────────────────────────────────────────────────────────
@@ -726,7 +727,11 @@ if __name__ == '__main__':
 		k, _, v = arg.partition('=')
 		vars_[k.strip()] = v.strip()
 	ctx = Context(vars=vars_)
-	sys.stdout.write(render_file(template_path, ctx))
+	try:
+		sys.stdout.write(render_file(template_path, ctx))
+	except Exception as e:
+		print(f'error: {e}', file=sys.stderr)
+		sys.exit(1)
 
 
 # ── xml element wrapper ───────────────────────────────────────────────────────
