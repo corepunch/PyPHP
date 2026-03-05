@@ -172,11 +172,29 @@ def _braces_to_indent(code: str) -> str:
 			result.append(_BRACE_INDENT * depth + stripped)
 			continue
 
-		# Standalone closing brace — ends a block, not emitted
+		# Standalone closing brace — ends a block, not emitted.
+		# If at depth 0 a bare } has no matching { in this tag: emit 'end' so
+		# _tokens_to_python can close a cross-tag brace block.
 		if stripped in ('}', '};'):
+			if depth == 0:
+				result.append('end')
 			depth = max(0, depth - 1)
 			if len(_class_stack) > 1:
 				_class_stack.pop()
+			continue
+
+		# } keyword { — e.g. "} else {" or "} else if (cond) {"
+		# Close the previous block then open the new one.
+		if stripped.startswith('}') and stripped.endswith('{'):
+			depth = max(0, depth - 1)
+			if len(_class_stack) > 1:
+				_class_stack.pop()
+			content = stripped[1:-1].strip()
+			if not content.endswith(':'):
+				content += ':'
+			result.append(_BRACE_INDENT * depth + content)
+			depth += 1
+			_class_stack.append(False)
 			continue
 
 		# Standalone opening brace (K&R / Allman style on its own line)
@@ -462,7 +480,8 @@ def php_to_python(code: str) -> str:
 		code
 	)
 	# ensure for/if/while/with blocks always end with : even if omitted in source
-	code = re.sub(r'^(for|if|elif|while|with)\b(.+?)\s*:?$', r'\1\2:', code.strip())
+	# also strips a trailing { so brace-style "if (cond) {" -> "if (cond):"
+	code = re.sub(r'^(for|if|elif|while|with)\b(.+?)\s*\{?\s*:?\s*$', r'\1\2:', code.strip())
 	# 2. endif/endforeach/endwhile/endfor -> end
 	code = _re_end.sub('end', code)
 	# 3. new ClassName( -> ClassName(
