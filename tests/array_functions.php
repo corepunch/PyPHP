@@ -1,21 +1,21 @@
 <?php $nums = [3, 1, 4, 1, 5, 9, 2, 6]; ?>
-<?= implode(", ", $nums) ?>
+<?php assert(implode(", ", $nums) == "3, 1, 4, 1, 5, 9, 2, 6") ?>
 <?php $words = "one,two,three"; ?>
-<?= implode("-", explode(",", $words)) ?>
+<?php assert(implode("-", explode(",", $words)) == "one-two-three") ?>
 <?php $fruits = ["apple", "banana", "cherry"]; ?>
-<?= in_array("banana", $fruits) ?>
-<?= in_array("grape", $fruits) ?>
-<?= count($fruits) ?>
-<?= array_sum($nums) ?>
+<?php assert(in_array("banana", $fruits)) ?>
+<?php assert(in_array("grape", $fruits) == false) ?>
+<?php assert(count($fruits) == 3) ?>
+<?php assert(array_sum($nums) == 31) ?>
 <?php $unique = array_unique([1, 2, 2, 3, 3, 3]); ?>
-<?= implode(",", $unique) ?>
+<?php assert(implode(",", $unique) == "1,2,3") ?>
 <?php $rev = array_reverse([1, 2, 3]); ?>
-<?= implode(",", $rev) ?>
+<?php assert(implode(",", $rev) == "3,2,1") ?>
 <?php sort($nums); ?>
-<?= implode(",", $nums) ?>
+<?php assert(implode(",", $nums) == "1,1,2,3,4,5,6,9") ?>
 <?php $keys = array_keys(["x", "y", "z"]); ?>
-<?= implode(",", $keys) ?>
+<?php assert(implode(",", $keys) == "0,1,2") ?>
 <?php $merged = array_merge([1, 2], [3, 4]); ?>
-<?= implode(",", $merged) ?>
+<?php assert(implode(",", $merged) == "1,2,3,4") ?>
 <?php $sliced = array_slice([10, 20, 30, 40, 50], 1, 3); ?>
-<?= implode(",", $sliced) ?>
+<?php assert(implode(",", $sliced) == "20,30,40") ?>

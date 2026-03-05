@@ -1,6 +1,6 @@
 <?php $x = "42"; $y = "3.14"; ?>
-<?= (int)$x ?>
-<?= (float)$y ?>
-<?= (string)100 ?>
+<?php assert((int)$x == 42) ?>
+<?php assert((float)$y == 3.14) ?>
+<?php assert((string)100 == "100") ?>
 <?php $flag = 1; ?>
-<?= (bool)$flag ?>
+<?php assert((bool)$flag == true) ?>

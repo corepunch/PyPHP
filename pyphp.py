@@ -209,6 +209,18 @@ def _apply_php_concat(code: str) -> str:
 			flush_chain()
 			result.append(';')
 
+		# ── plain assignment: flush LHS to result, continue fresh ─────────────
+		elif ch == '=' and depth == 0:
+			prev_ch = code[i - 1] if i > 0 else ''
+			next_ch = code[i + 1] if i + 1 < n else ''
+			if prev_ch in '!<>=.+-*/' or next_ch in '=>':
+				current.append(ch)   # compound operator (==, !=, <=, =>, +=, …)
+			else:
+				# plain assignment: LHS is not part of a concat chain
+				flush_current()
+				flush_chain()
+				result.append(ch)
+
 		# ── potential concat dot ───────────────────────────────────────────────
 		elif ch == '.' and depth == 0:
 			prev_ch = code[i - 1] if i > 0 else ''
@@ -715,6 +727,15 @@ def render(source: str, ctx: Context, filename: str = '<template>') -> str:
 				scope[f'__{k}'] = scope[k]
 
 	scope['_require'] = _require
+
+	# assert_renders(source, expected) — render a PHP snippet and assert its output.
+	# Useful in .phps test files to verify template rendering inline.
+	def _assert_renders(source: str, expected: str) -> None:
+		result = render(source, Context())
+		assert result == expected, f'render output {result!r} != expected {expected!r}'
+
+	scope['assert_renders']   = _assert_renders
+	scope['__assert_renders'] = _assert_renders
 
 	try:
 		exec(compile(script, filename, 'exec'), scope)

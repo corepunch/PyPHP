@@ -1,14 +1,14 @@
 <?php $s = "  Hello World  "; ?>
-<?= strlen($s) ?>
-<?= strtolower($s) ?>
-<?= strtoupper($s) ?>
-<?= trim($s) ?>
-<?= str_replace("World", "PHP", $s) ?>
+<?php assert(strlen($s) == 15) ?>
+<?php assert(strtolower($s) == "  hello world  ") ?>
+<?php assert(strtoupper($s) == "  HELLO WORLD  ") ?>
+<?php assert(trim($s) == "Hello World") ?>
+<?php assert(str_replace("World", "PHP", $s) == "  Hello PHP  ") ?>
 <?php $t = "abcdef"; ?>
-<?= substr($t, 2, 3) ?>
-<?= strpos($t, "cd") ?>
-<?= str_repeat("ab", 3) ?>
-<?= ucfirst("hello world") ?>
-<?= ucwords("hello world") ?>
-<?= sprintf("%.2f", 3.14159) ?>
-<?= number_format(1234567.891, 2) ?>
+<?php assert(substr($t, 2, 3) == "cde") ?>
+<?php assert(strpos($t, "cd") == 2) ?>
+<?php assert(str_repeat("ab", 3) == "ababab") ?>
+<?php assert(ucfirst("hello world") == "Hello world") ?>
+<?php assert(ucwords("hello world") == "Hello World") ?>
+<?php assert(sprintf("%.2f", 3.14159) == "3.14") ?>
+<?php assert(number_format(1234567.891, 2) == "1,234,567.89") ?>
