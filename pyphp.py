@@ -151,7 +151,12 @@ def _braces_to_indent(code: str) -> str:
 
 		# Colon-style block closers: end / endif / endforeach / …
 		if _re_brace_block_close.match(stripped):
-			depth = max(0, depth - 1)
+			if depth > 0:
+				depth -= 1
+			else:
+				# Unmatched closer at the top level — pass it through so
+				# _tokens_to_python can use it to decrement the outer indent.
+				result.append(stripped)
 			continue
 
 		# elif / else / except / finally — same-level transition
@@ -432,11 +437,11 @@ def php_to_python(code: str) -> str:
 		lambda m: f'_require({_rewrite_require(m.group(1))!r})',
 		code
 	)
-	# 11. Brace-to-indent: convert PHP { } blocks to Python indentation.
-	#     Applied when braces are present (i.e., function bodies or brace-style
-	#     if/for/while blocks).  Must run last so all keyword conversions are done.
-	if '{' in code or '}' in code:
-		code = _braces_to_indent(code)
+	# 11. Brace-to-indent: convert PHP { } blocks to Python indentation, and
+	#     normalise indentation in multi-line code blocks (foreach+body+endforeach
+	#     in one <?php ?> tag).  Always applied so that multi-line blocks without
+	#     explicit braces are also indented correctly.
+	code = _braces_to_indent(code)
 	return code
 
 
@@ -596,6 +601,34 @@ def _make_php_builtins() -> dict:
 	def _empty(x):
 		return x in (None, False, 0, 0.0, '', '0', [], {})
 
+	# ── hashing ───────────────────────────────────────────────────────────────
+	def _hash(algo, data, raw_output=False):
+		import hashlib
+		normalized_algo = str(algo).lower().replace('-', '')
+		encoded_data = str(data).encode('utf-8')
+		if normalized_algo in ('fnv1a32', 'fnv132'):
+			h = 2166136261
+			for byte in encoded_data:
+				if normalized_algo == 'fnv1a32':
+					h = ((h ^ byte) * 16777619) & 0xFFFFFFFF
+				else:
+					h = ((h * 16777619) ^ byte) & 0xFFFFFFFF
+			digest = h.to_bytes(4, 'big')
+		elif normalized_algo in ('fnv1a64', 'fnv164'):
+			h = 14695981039346656037
+			for byte in encoded_data:
+				if normalized_algo == 'fnv1a64':
+					h = ((h ^ byte) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+				else:
+					h = ((h * 1099511628211) ^ byte) & 0xFFFFFFFFFFFFFFFF
+			digest = h.to_bytes(8, 'big')
+		else:
+			try:
+				digest = hashlib.new(normalized_algo, encoded_data).digest()
+			except ValueError:
+				raise ValueError(f'Unknown hashing algorithm: {algo!r}')
+		return digest if raw_output else digest.hex()
+
 	return {
 		# string
 		'strlen':              _strlen,
@@ -681,6 +714,8 @@ def _make_php_builtins() -> dict:
 		# serialisation
 		'json_encode':         lambda x, flags=0: json.dumps(x),
 		'json_decode':         lambda x, assoc=False: json.loads(x),
+		# hashing
+		'hash':                _hash,
 		# internal: used by the PHP-concat translator (not called directly by templates)
 		'_cat':                lambda *args: ''.join(str(a) for a in args),
 	}
@@ -780,7 +815,11 @@ def _tokens_to_python(tokens: list) -> str:
 	tab = '	'
 
 	def emit(line):
-		lines.append(tab * indent + line)
+		if '\n' in line:
+			for code_line in line.split('\n'):
+				lines.append(tab * indent + code_line)
+		else:
+			lines.append(tab * indent + line)
 
 	for token in tokens:
 		if isinstance(token, TextToken):
