@@ -1,0 +1,21 @@
+<?php $nums = [3, 1, 4, 1, 5, 9, 2, 6]; ?>
+<?= implode(", ", $nums) ?>
+<?php $words = "one,two,three"; ?>
+<?= implode("-", explode(",", $words)) ?>
+<?php $fruits = ["apple", "banana", "cherry"]; ?>
+<?= in_array("banana", $fruits) ?>
+<?= in_array("grape", $fruits) ?>
+<?= count($fruits) ?>
+<?= array_sum($nums) ?>
+<?php $unique = array_unique([1, 2, 2, 3, 3, 3]); ?>
+<?= implode(",", $unique) ?>
+<?php $rev = array_reverse([1, 2, 3]); ?>
+<?= implode(",", $rev) ?>
+<?php sort($nums); ?>
+<?= implode(",", $nums) ?>
+<?php $d = {"a": 1, "b": 2, "c": 3}; ?>
+<?= implode(",", array_keys($d)) ?>
+<?php $merged = array_merge([1, 2], [3, 4]); ?>
+<?= implode(",", $merged) ?>
+<?php $sliced = array_slice([10, 20, 30, 40, 50], 1, 3); ?>
+<?= implode(",", $sliced) ?>

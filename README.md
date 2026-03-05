@@ -175,6 +175,60 @@ struct Rect {
 
 ---
 
+### 6 — String interpolation and concatenation
+
+```php
+<?php $first = "Ada"; $last = "Lovelace"; ?>
+<?= "Hello, $first!" ?>
+<?= $first . " " . $last ?>
+<?= "Full name: {$first} {$last}" ?>
+```
+
+Output:
+```
+Hello, Ada!
+Ada Lovelace
+Full name: Ada Lovelace
+```
+
+---
+
+### 7 — Type casting and `list()` unpacking
+
+```php
+<?php $parts = ["42", "3.14"]; ?>
+<?php list($n, $f) = $parts; ?>
+int:   <?= (int)$n ?>
+float: <?= (float)$f ?>
+```
+
+Output:
+```
+int:   42
+float: 3.14
+```
+
+---
+
+### 8 — PHP string and array functions
+
+```php
+<?php $tags = ["PHP", "Python", "Ruby"]; ?>
+<?= implode(", ", $tags) ?>
+<?= strtolower(implode(" | ", $tags)) ?>
+<?php $csv = "one,two,three"; ?>
+<?= count(explode(",", $csv)) ?>
+```
+
+Output:
+```
+PHP, Python, Ruby
+php | python | ruby
+3
+```
+
+---
+
 ## Using PyPHP as a Library
 
 ```python
@@ -222,6 +276,16 @@ ctx = Context(
 | HTML comment stripping | `<!-- ... -->` | Stripped before parsing |
 | `$argv` | `$argv[1]` | Command-line arguments (index 0 = first real arg) |
 | XML dot-access wrapper | `E` class | Lets `$el->attr` work on XML elements |
+| String interpolation | `"Hello $name"`, `"Item $arr[0]"`, `"{$name}"` | Double-quoted strings with `$var` become Python f-strings |
+| String concatenation | `$a . $b`, `$a .= $b` | Coerces both sides to string (mixed types safe) |
+| `include` / `require_once` / `include_once` | `include "file.php"` | Alias for `require`; executes file in current scope |
+| Type casting | `(int)$x`, `(float)$x`, `(string)$x`, `(bool)$x` | Mapped to `int()`, `float()`, `str()`, `bool()` |
+| `list()` assignment | `list($a, $b) = $arr` | Mapped to Python tuple unpacking |
+| PHP string functions | `strlen()`, `strtolower()`, `strtoupper()`, `trim()`, `str_replace()`, `substr()`, `strpos()`, `sprintf()`, `ucfirst()`, `ucwords()`, `str_repeat()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `number_format()`, `nl2br()`, `htmlspecialchars()`, `strip_tags()`, `str_split()`, … | Available directly in templates |
+| PHP array functions | `implode()`, `explode()`, `in_array()`, `array_merge()`, `array_keys()`, `array_values()`, `array_map()`, `array_filter()`, `array_reverse()`, `array_unique()`, `array_push()`, `array_pop()`, `array_shift()`, `array_slice()`, `array_chunk()`, `array_sum()`, `array_flip()`, `array_search()`, `sort()`, `rsort()`, … | Available directly in templates |
+| Math functions | `abs()`, `ceil()`, `floor()`, `round()`, `pow()`, `sqrt()`, `max()`, `min()`, `rand()` | Available directly in templates |
+| Type-check / conversion helpers | `intval()`, `floatval()`, `strval()`, `is_array()`, `is_string()`, `is_int()`, `is_numeric()`, `isset()`, `empty()` | Available directly in templates |
+| JSON helpers | `json_encode()`, `json_decode()` | Available directly in templates |
 
 ---
 
@@ -231,16 +295,9 @@ The following PHP features are not currently translated and are on the roadmap:
 
 | Feature | PHP syntax | Status |
 |---|---|---|
-| String interpolation | `"Hello $name"` | ⏳ Planned |
-| String concatenation operator | `$a . $b` | ⏳ Planned (use Python `+` for now) |
-| PHP ternary operator | `$a ? $b : $c` | ⏳ Planned (Python `b if a else c` works) |
-| `include` / `require_once` | `include "file.php"` | ⏳ Planned |
-| Type casting | `(int)$x`, `(string)$x` | ⏳ Planned |
-| PHP string functions | `strlen()`, `str_replace()`, … | ⏳ Planned |
-| PHP array functions | `array_map()`, `array_filter()`, … | ⏳ Planned |
+| PHP ternary operator | `$a ? $b : $c` | ⏳ Planned (use Python `$b if $a else $c` for now) |
 | `switch` / `case` | `switch ($x) { case 1: ... }` | ⏳ Planned |
 | Class / function definitions in templates | `function foo() { ... }` | ⏳ Planned |
-| `list()` assignment | `list($a, $b) = $arr` | ⏳ Planned |
 
 > **Tip:** Because the code inside `<?php ?>` tags is executed as Python, you can use any Python expression or built-in directly — `len()`, `range()`, `sorted()`, list comprehensions, etc.
 
