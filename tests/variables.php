@@ -1,0 +1,3 @@
+<?php $name = "PHP"; ?>
+<?php $version = 8; ?>
+<?= $name ?> <?= $version ?>
