@@ -177,6 +177,79 @@ def _braces_to_indent(code: str) -> str:
 	return '\n'.join(result)
 
 
+_re_inline_end = re.compile(r';\s*end\s*:?\s*$')
+
+
+def _split_inline_blocks(code: str) -> str:
+	"""Split single-line inline blocks into two lines.
+
+	Transforms 'for ...: body; end' -> 'for ...:\\nbody'.
+
+	This runs after foreach→for and endforeach→end so the 'for' header is
+	already in Python form.  It must run before the echo conversion (step 9)
+	which only recognises echo at the start of a line.
+	"""
+	lines = code.splitlines()
+	result: list[str] = []
+	_openers = ('for ', 'if ', 'elif ', 'while ', 'with ',
+	            'for(', 'if(', 'while(')
+	for raw_line in lines:
+		stripped = raw_line.strip()
+		# Only process lines that start with a block-opening keyword
+		if not any(stripped.startswith(kw) for kw in _openers):
+			result.append(raw_line)
+			continue
+
+		# Character-level scan to find the colon that closes the block header,
+		# skipping over string literals and nested parentheses.
+		n, i, depth, colon_pos = len(stripped), 0, 0, None
+		while i < n:
+			c = stripped[i]
+			# f-strings: skip the 'f' prefix so the quote handling below works
+			if c == 'f' and i + 1 < n and stripped[i + 1] in ('"', "'"):
+				i += 1
+				c = stripped[i]
+			if c in ('"', "'"):
+				q, i = c, i + 1
+				while i < n:
+					if stripped[i] == '\\':
+						i += 2
+						continue
+					if stripped[i] == q:
+						break
+					i += 1
+			elif c in ('(', '['):
+				depth += 1
+			elif c in (')', ']'):
+				depth -= 1
+			elif c == ':' and depth == 0:
+				colon_pos = i
+				break
+			i += 1
+
+		if colon_pos is None:
+			result.append(raw_line)
+			continue
+
+		after = stripped[colon_pos + 1:].strip()
+		# Only split when the remainder has a body AND ends with "; end"
+		if not after or not _re_inline_end.search(after):
+			result.append(raw_line)
+			continue
+
+		body = _re_inline_end.sub('', after).rstrip()
+		if not body:
+			result.append(raw_line)
+			continue
+
+		leading = raw_line[: len(raw_line) - len(stripped)]
+		result.append(leading + stripped[: colon_pos + 1])
+		result.append(leading + body)
+		result.append(leading + 'end')  # close the block for _braces_to_indent
+
+	return '\n'.join(result)
+
+
 def _php_string_interpolation(code: str) -> str:
 	"""Convert PHP double-quoted strings that contain $variables to Python f-strings.
 
@@ -373,6 +446,9 @@ def php_to_python(code: str) -> str:
 	code = re.sub(r'^(for|if|elif|while|with)\b(.+?)\s*:?$', r'\1\2:', code.strip())
 	# 2. endif/endforeach/endwhile/endfor -> end
 	code = _re_end.sub('end', code)
+	# 2a. Split single-line inline blocks: "for ...: body; end" -> "for ...:\nbody"
+	#     Must run before echo conversion (step 9) which requires echo at line start.
+	code = _split_inline_blocks(code)
 	# 3. new ClassName( -> ClassName(
 	code = _re_new.sub(r'\1(', code)
 	# 4. count( -> len(  outside strings
