@@ -19,6 +19,13 @@ PHP conversions applied inside <?php ?> and <?= ?> tags:
 	list($a, $b) = $arr		->  __a, __b = __arr
 	use A\\B\\C;			   ->  import A.B.C as C  (namespace import)
 	use A\\B\\C as D;		  ->  import A.B.C as D
+	class Foo { }			  ->  class Foo: (with body)
+	class Foo extends Bar { }  ->  class Foo(Bar): (inheritance)
+	public/private/protected   ->  (removed; access modifiers not in Python)
+	public static function	 ->  @staticmethod + def
+	$this->prop				->  self.prop
+	parent::method(args)	   ->  super().method(args)
+	function __construct(...)  ->  def __init__(...)
 """
 
 import math
@@ -97,8 +104,33 @@ _STMT_KEYWORDS = ('echo ', 'return ', 'print ')
 _BRACE_INDENT = '    '
 
 # Patterns used inside _braces_to_indent to handle colon-style blocks
-_re_brace_block_open  = re.compile(r'^(for|if|elif|else|with|while|try|except|finally|def)\b.*:$')
+_re_brace_block_open  = re.compile(r'^(for|if|elif|else|with|while|try|except|finally|def|class)\b.*:$')
 _re_brace_block_close = re.compile(r'^(end|endforeach|endif|endwhile|endfor|endelse)\s*;?\s*$')
+
+# PHP class support
+# class Foo extends Bar  ->  class Foo(Bar)
+_re_class_extends = re.compile(r'\bclass\s+(\w+)\s+extends\s+(\w+)')
+# $this  ->  self  (matched before general $var -> __var)
+_re_this = re.compile(r'\$this\b')
+# parent::method(  ->  super().method(
+_re_parent_call = re.compile(r'\bparent::(\w+)\s*\(')
+# Used by _inject_self_into_def to parse "def name(params)..." lines
+_re_def_params = re.compile(r'^(def\s+\w+\s*\()([^)]*)(\).*)$')
+
+
+def _inject_self_into_def(content: str) -> str:
+	"""Inject 'self' as first parameter into a def statement inside a class."""
+	m = _re_def_params.match(content)
+	if not m:
+		return content
+	prefix, params, suffix = m.group(1), m.group(2).strip(), m.group(3)
+	if not params:
+		return f'{prefix}self{suffix}'
+	# Check the name of the first parameter (ignoring any default value).
+	first_param_name = params.split(',')[0].strip().split('=')[0].strip()
+	if first_param_name == 'self':
+		return content  # already has self
+	return f'{prefix}self, {params}{suffix}'
 
 
 def _sub_outside_strings(pattern, repl, code):
@@ -117,10 +149,15 @@ def _braces_to_indent(code: str) -> str:
 	Handles function bodies and mixed-style code where brace blocks { } appear
 	alongside colon-style blocks (if ...: / endif) within a single PHP segment.
 	Processes line by line, tracking brace and colon block depth.
+	Also tracks class bodies so that method definitions receive a 'self' parameter.
 	"""
 	lines = code.splitlines()
 	result: list[str] = []
 	depth = 0
+	# Stack of booleans: True if the block opened at that depth is a class body.
+	# Index 0 represents module level (not a class).
+	_class_stack: list[bool] = [False]
+	_next_staticmethod = False
 
 	for line in lines:
 		stripped = line.strip()
@@ -129,30 +166,47 @@ def _braces_to_indent(code: str) -> str:
 			result.append('')
 			continue
 
+		# Track @staticmethod decorator so the following def skips self injection.
+		if stripped == '@staticmethod':
+			_next_staticmethod = True
+			result.append(_BRACE_INDENT * depth + stripped)
+			continue
+
 		# Standalone closing brace — ends a block, not emitted
 		if stripped in ('}', '};'):
 			depth = max(0, depth - 1)
+			if len(_class_stack) > 1:
+				_class_stack.pop()
 			continue
 
 		# Standalone opening brace (K&R / Allman style on its own line)
 		if stripped == '{':
 			depth += 1
+			_class_stack.append(False)
 			continue
 
 		# Line ending with { — block opener (e.g. `def foo():` already has :,
 		# or `if (__x > 0)` needs one appended)
 		if stripped.endswith('{'):
 			content = stripped[:-1].rstrip()
+			is_class = content.startswith('class ')
 			if not content.endswith(':'):
 				content += ':'
+			# Inject self into method definitions directly inside a class body.
+			if _class_stack[-1] and content.startswith('def ') and not _next_staticmethod:
+				content = _inject_self_into_def(content)
+			_next_staticmethod = False
 			result.append(_BRACE_INDENT * depth + content)
 			depth += 1
+			_class_stack.append(is_class)
 			continue
 
 		# Colon-style block closers: end / endif / endforeach / …
 		if _re_brace_block_close.match(stripped):
 			if depth > 0:
 				depth -= 1
+				if len(_class_stack) > 1:
+					_class_stack.pop()
 			else:
 				# Unmatched closer at the top level — pass it through so
 				# _tokens_to_python can use it to decrement the outer indent.
@@ -162,14 +216,22 @@ def _braces_to_indent(code: str) -> str:
 		# elif / else / except / finally — same-level transition
 		if stripped.startswith(('elif ', 'else', 'except', 'finally')):
 			depth = max(0, depth - 1)
+			if len(_class_stack) > 1:
+				_class_stack.pop()
 			result.append(_BRACE_INDENT * depth + stripped)
 			depth += 1
+			_class_stack.append(False)
 			continue
 
 		# Colon-style block openers: if ...:  /  for ...:  /  def ...:  / …
 		if _re_brace_block_open.match(stripped):
+			# Inject self into method defs directly inside a class body.
+			if _class_stack[-1] and stripped.startswith('def ') and not _next_staticmethod:
+				stripped = _inject_self_into_def(stripped)
+			_next_staticmethod = False
 			result.append(_BRACE_INDENT * depth + stripped)
 			depth += 1
+			_class_stack.append(False)
 			continue
 
 		result.append(_BRACE_INDENT * depth + stripped)
@@ -433,6 +495,41 @@ def php_to_python(code: str) -> str:
 	#    Must run first so $vars inside double-quoted strings are handled before
 	#    the global $var->__var substitution (which skips string contents).
 	code = _php_string_interpolation(code)
+	# 0a. Class syntax preprocessing (must run before foreach/$var/function steps).
+	#     i. Remove 'abstract' from class declarations: abstract class Foo -> class Foo
+	code = re.sub(r'\babstract\s+(?=class\b)', '', code)
+	#     ii. Remove no-value property declarations: public $name; -> (removed)
+	code = re.sub(
+		r'^\s*(?:public|private|protected)\s+(?:static\s+)?\$\w+\s*;[ \t]*$',
+		'',
+		code,
+		flags=re.MULTILINE,
+	)
+	#     iii. Property declarations with values: public $name = val; -> name = val;
+	#          Strip both the access modifier AND the $ so the name is not __-prefixed.
+	code = re.sub(
+		r'\b(?:public|private|protected)\s+(?:static\s+)?\$(\w+)\s*=',
+		r'\1 =',
+		code,
+	)
+	#     iv. Static method declarations: public static function -> @staticmethod\nfunction
+	#         Preserve the original leading whitespace so indentation survives.
+	code = re.sub(
+		r'^([ \t]*)(?:public|private|protected)\s+static\s+function\b',
+		r'\1@staticmethod\n\1function',
+		code,
+		flags=re.MULTILINE,
+	)
+	#     v. Access modifiers on methods: public/private/protected function -> function
+	code = re.sub(r'\b(?:public|private|protected)\s+function\b', 'function', code)
+	#     vi. Abstract methods: abstract [public] function -> function
+	code = re.sub(
+		r'\babstract\s+(?:(?:public|private|protected)\s+)?function\b',
+		'function',
+		code,
+	)
+	#     vii. class Foo extends Bar -> class Foo(Bar)
+	code = _re_class_extends.sub(r'class \1(\2)', code)
 	# 1. foreach — before $var so we still see $ in iterable expression
 	code = _re_foreach_kv.sub(
 		lambda m: f'for __{m.group(2)}, __{m.group(3)} in _items({_php_expr(m.group(1))}):',
@@ -466,6 +563,8 @@ def php_to_python(code: str) -> str:
 	# 4d. PHP use statement -> Python import (after concat: backslash-paths survive concat;
 	#     the resulting dot-paths must not be present when _apply_php_concat runs)
 	code = _re_use.sub(_use_repl, code)
+	# 4e. $this -> self  (must run before -> to . so $this->prop becomes self.prop)
+	code = _sub_outside_strings(_re_this, 'self', code)
 	# 5. -> to .  outside strings
 	code = _sub_outside_strings(re.compile(r'->'), '.', code)
 	# 6. true/false/null  outside strings
@@ -483,7 +582,15 @@ def php_to_python(code: str) -> str:
 		lambda m: m.group(1),
 		code,
 	)
-	# 8b. PHP function declarations -> Python def (after $var->__var so params are __name)
+	# 8b. parent::method( -> super().method(  (handles __construct -> __init__ too)
+	def _parent_repl(m: re.Match) -> str:
+		method = '__init__' if m.group(1) == '__construct' else m.group(1)
+		return f'super().{method}('
+	code = _sub_outside_strings(_re_parent_call, _parent_repl, code)
+	# 8b2. :: (static method / property / class-constant access) -> .
+	#      parent:: is already resolved above; remaining :: are ClassName::member.
+	code = _sub_outside_strings(re.compile(r'::'), '.', code)
+	# 8c. PHP function declarations -> Python def (after $var->__var so params are __name)
 	#     Empty body: function foo(__a) {} -> def foo(__a): pass
 	code = _sub_outside_strings(
 		_re_func_empty,
@@ -496,6 +603,8 @@ def php_to_python(code: str) -> str:
 		lambda m: f'def {m.group(1)}',
 		code,
 	)
+	# 8d. Rename PHP constructor to Python constructor
+	code = re.sub(r'\bdef\s+__construct\b', 'def __init__', code)
 	# 9. echo -> _out.append(str(expr))  — works in all positions (MULTILINE)
 	#    This replaces the old "strip echo" behaviour and makes echo produce output
 	#    everywhere, including inside function bodies.
@@ -882,7 +991,7 @@ def tokenize(source: str) -> list:
 
 # ── code generation ───────────────────────────────────────────────────────────
 
-_BLOCK_OPEN  = re.compile(r'^(for|if|elif|else|with|while|try|except|finally|def)\b.*:$')
+_BLOCK_OPEN  = re.compile(r'^(for|if|elif|else|with|while|try|except|finally|def|class)\b.*:$')
 _BLOCK_CLOSE = re.compile(r'^(end|endforeach|endif|endwhile|endfor|endelse)$')
 
 
