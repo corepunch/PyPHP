@@ -50,6 +50,7 @@ _re_count	  = re.compile(r'\bcount\s*\(')
 _re_comment	= re.compile(r'(?<!:)//(.*)$', re.MULTILINE)
 # PHP block comments /* ... */ — strip comment AND surrounding horizontal whitespace
 # so "/* comment */ $x" -> "$x" without a leading space on the line.
+# Applied via _sub_outside_strings so content of PHP strings is protected.
 _re_block_comment = re.compile(r'[ \t]*/\*.*?\*/[ \t]*', re.DOTALL)
 _re_echo	   = re.compile(r'^\s*echo\s+')
 _re_end		= re.compile(r'\b(endif|endforeach|endwhile|endfor)\b')
@@ -182,7 +183,9 @@ def _braces_to_indent(code: str) -> str:
 			m = re.match(r'^(def\s+\w+\s*\()([^)]*)\)', content)
 			if m:
 				params = m.group(2).strip()
-				if not params.startswith('self'):
+				# Check precisely: first param must not already be 'self'
+				first_param = params.split(',')[0].strip() if params else ''
+				if first_param != 'self':
 					new_params = ('self, ' + params) if params else 'self'
 					content = content[:m.start(2)] + new_params + content[m.end(2):]
 		return content
@@ -451,6 +454,11 @@ def _php_expr(expr: str) -> str:
 
 def php_to_python(code: str) -> str:
 	# -1. Strip /* ... */ block comments (may be multi-line inside one PHP block).
+	#     Direct substitution is intentional here: using _sub_outside_strings would
+	#     fail when comments contain apostrophes (e.g. "PyPHP's") because _re_string
+	#     would misidentify those as string literal boundaries.  Block comments in
+	#     PHP cannot themselves contain string literals with semantic meaning, so
+	#     applying the pattern directly is safe and simpler.
 	code = _re_block_comment.sub('', code)
 	# 0. String interpolation: "Hello $name" -> f"Hello {__name}"
 	#    Must run first so $vars inside double-quoted strings are handled before
@@ -472,8 +480,8 @@ def php_to_python(code: str) -> str:
 	code = _sub_outside_strings(_re_php_and, ' and ', code)
 	code = _sub_outside_strings(_re_php_or,  ' or ', code)
 	code = _sub_outside_strings(_re_php_not, 'not ', code)
-	# 0c. const NAME = val  ->  NAME = val
-	code = re.sub(_re_const, '', code)
+	# 0c. const NAME = val  ->  NAME = val  (outside strings only)
+	code = _sub_outside_strings(_re_const, '', code)
 	# 4a. PHP concatenation assignment .= -> +=  (before the bare-dot step)
 	code = _sub_outside_strings(_re_concat_assign, '+=', code)
 	# 4b. Normalize echo(expr) -> echo expr so the concat step below can process it.
