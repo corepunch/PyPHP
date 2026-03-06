@@ -51,8 +51,8 @@ Or individually:
 | Example | Command | Output |
 |---------|---------|--------|
 | **C header generation** from an XML model | `python3 -m pyphp examples/c_header/header.php examples/c_header/model.xml` | A `.h` file with `typedef` / `struct` declarations |
-| **HTML report** with KPI cards and a data table | `python3 -m pyphp examples/html/report.php` | A styled HTML page |
-| **Markdown API docs** generated from inline data | `python3 -m pyphp examples/docs/api.php` | A Markdown reference document |
+| **HTML weather report** fetched from open-meteo.com | `python3 -m pyphp examples/html/report.php` | A styled HTML page with live weather for several cities |
+| **Markdown API docs** generated from an XML definition file | `python3 -m pyphp examples/docs/api.php` | A Markdown reference document |
 
 ---
 

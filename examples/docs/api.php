@@ -1,57 +1,40 @@
 <?php
-$lib     = "pyphp";
-$version = "1.0";
-$funcs = [
-    [
-        "render",
-        "render(source, ctx)",
-        "Render a PHP template string and return the output as a string.",
-        [
-            ["source", "str",     "PHP template source code"],
-            ["ctx",    "Context", "Holds template variables and optional output filters"],
-        ],
-        "str",
-        'render(source, Context(vars={"name": "world"}))',
-    ],
-    [
-        "render_file",
-        "render_file(path, ctx)",
-        "Load a .php template from disk and render it.",
-        [
-            ["path", "str | Path", "Path to the .php template file"],
-            ["ctx",  "Context",    "Holds template variables and optional output filters"],
-        ],
-        "str",
-        'render_file("page.php", Context(vars={"title": "Hello"}))',
-    ],
-    [
-        "php_to_python",
-        "php_to_python(code)",
-        "Translate a snippet of PHP code to equivalent Python.",
-        [
-            ["code", "str", "Raw PHP code string (without template tags)"],
-        ],
-        "str",
-        "php_to_python('strtolower(implode(\", \", [\"a\", \"b\"]))')",
-    ],
-];
-$classes = [
-    [
-        "Context",
-        "Holds the variables and filters passed to a template.",
-        [
-            ["vars",    "dict[str, Any]",      "Template variables, accessed as PHP variables inside templates"],
-            ["filters", "dict[str, Callable]", "Named post-processing functions for output expressions"],
-        ],
-    ],
-    [
-        "E",
-        "Wraps an xml.etree.ElementTree.Element for dot-access of attributes in templates.",
-        [
-            ["(any XML attribute)", "str", "Read directly as a property: el->name, el->type, etc."],
-        ],
-    ],
-];
+use xml\etree\ElementTree as ET;
+use pyphp\renderer as renderer;
+
+$xml_path = "examples/docs/api.xml";
+$root     = renderer::E(ET::parse($xml_path)->getroot());
+$lib      = $root->lib;
+$version  = $root->version;
+
+$funcs = [];
+foreach ($root->find("functions")->findall("function") as $fn) {
+    $params = [];
+    foreach ($fn->findall("param") as $p) {
+        array_push($params, [$p->name, $p->type, $p->description]);
+    }
+    array_push($funcs, [
+        $fn->name,
+        $fn->signature,
+        $fn->description,
+        $params,
+        $fn->returns,
+        $fn->example,
+    ]);
+}
+
+$classes = [];
+foreach ($root->find("classes")->findall("class") as $cls) {
+    $attrs = [];
+    foreach ($cls->findall("attr") as $a) {
+        array_push($attrs, [$a->name, $a->type, $a->description]);
+    }
+    array_push($classes, [
+        $cls->name,
+        $cls->description,
+        $attrs,
+    ]);
+}
 ?>
 # <?= strtoupper($lib) ?> API Reference
 
