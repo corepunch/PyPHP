@@ -695,7 +695,8 @@ def _braces_to_indent(code: str) -> str:
         # Standalone closing brace — ends a block, not emitted
         if stripped in ('}', '};'):
             if lit_depth > 0:
-                # Closing a dict/set literal — emit the brace and keep indentation.
+                # Closing a dict/set/other expression literal opened below —
+                # emit the brace unchanged and restore the literal-brace depth.
                 lit_depth -= 1
                 result.append(_BRACE_INDENT * depth + stripped)
             elif depth > 0:
@@ -717,12 +718,16 @@ def _braces_to_indent(code: str) -> str:
         # Line ending with { — either a block opener (def/if/for/class …) or
         # the start of a multi-line dict/set literal (x = {, return {, …).
         # Only treat it as a block opener when the first word is a known
-        # control-flow / definition keyword; everything else is a literal.
+        # control-flow / definition keyword; everything else (assignments,
+        # return statements, etc.) is a literal whose braces must be kept.
         if stripped.endswith('{'):
             content = stripped[:-1].rstrip()
-            first_word = (content.split() or [''])[0]
+            # Use split(maxsplit=1) so multi-word content (e.g. leading
+            # decorator text) is handled correctly; guard against empty content.
+            first_word = content.split(maxsplit=1)[0] if content else ''
             if first_word not in _BLOCK_OPENER_KEYWORDS:
-                # Dict/set literal opening brace — pass through and track depth.
+                # Dict/set/other literal opening brace — pass through and track
+                # depth so the matching } is also passed through unchanged.
                 lit_depth += 1
                 result.append(_BRACE_INDENT * depth + stripped)
                 continue
