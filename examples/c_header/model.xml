@@ -1,0 +1,23 @@
+<model>
+  <struct name="Vec2">
+    <field name="x" type="float"/>
+    <field name="y" type="float"/>
+  </struct>
+  <struct name="Vec3">
+    <field name="x" type="float"/>
+    <field name="y" type="float"/>
+    <field name="z" type="float"/>
+  </struct>
+  <struct name="Color">
+    <field name="r" type="uint8_t"/>
+    <field name="g" type="uint8_t"/>
+    <field name="b" type="uint8_t"/>
+    <field name="a" type="uint8_t"/>
+  </struct>
+  <struct name="Rect">
+    <field name="x"      type="float"/>
+    <field name="y"      type="float"/>
+    <field name="width"  type="float"/>
+    <field name="height" type="float"/>
+  </struct>
+</model>
