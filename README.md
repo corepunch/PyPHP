@@ -96,6 +96,8 @@ class Model:
 
 ```php
 <?php
+// PyPHP maps `use` to Python imports, so Python's xml.etree.ElementTree
+// is available here transparently — no PHP XML extension required.
 use xml\etree\ElementTree as ET;
 use pyphp\renderer as renderer;
 
