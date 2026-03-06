@@ -21,7 +21,7 @@ This is especially useful for **generating source code** from structured data.  
 ## Quick Start
 
 ```
-python pyphp.py template.php [key=value ...]
+python3 -m pyphp template.php [key=value ...]
 ```
 
 Variables passed on the command line are available as `$key` inside the template.
@@ -31,9 +31,28 @@ Variables passed on the command line are available as `$key` inside the template
 ```
 
 ```
-$ python pyphp.py hello.php
+$ python3 -m pyphp hello.php
 Hello, World!
 ```
+
+---
+
+## Runnable Examples
+
+The [`examples/`](examples/) directory contains three ready-to-run use cases.
+Run them all at once with:
+
+```
+make examples
+```
+
+Or individually:
+
+| Example | Command | Output |
+|---------|---------|--------|
+| **C header generation** from an XML model | `python3 -m pyphp examples/c_header/header.php examples/c_header/model.xml` | A `.h` file with `typedef` / `struct` declarations |
+| **HTML report** with KPI cards and a data table | `python3 -m pyphp examples/html/report.php` | A styled HTML page |
+| **Markdown API docs** generated from inline data | `python3 -m pyphp examples/docs/api.php` | A Markdown reference document |
 
 ---
 
