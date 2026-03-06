@@ -19,3 +19,26 @@
 <?php assert(implode(",", $merged) == "1,2,3,4") ?>
 <?php $sliced = array_slice([10, 20, 30, 40, 50], 1, 3); ?>
 <?php assert(implode(",", $sliced) == "20,30,40") ?>
+<?php $assoc = ["a" => 10, "b" => 20, "c" => 30]; ?>
+<?php assert(implode(",", $assoc) == "10,20,30") ?>
+<?php $doubled = array_map(fn($v) => $v * 2, $assoc); ?>
+<?php assert(implode(",", $doubled) == "20,40,60") ?>
+<?php $akeys = array_keys($assoc); ?>
+<?php assert(implode(",", $akeys) == "a,b,c") ?>
+<?php
+// Multi-line associative array with object values — array_map must receive
+// the VALUES (objects), not the keys (strings), so ->tag works correctly.
+class FieldType {
+    public $tag;
+    public function __construct($tag) {
+        $this->tag = $tag;
+    }
+}
+$parsers = [
+    "x" => new FieldType("float"),
+    "n" => new FieldType("int"),
+    "s" => new FieldType("string"),
+];
+$tags = array_map(fn($v) => $v->tag, $parsers);
+assert(implode(", ", $tags) == "float, int, string");
+?>

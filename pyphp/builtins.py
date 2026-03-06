@@ -78,8 +78,10 @@ def _make_php_builtins() -> dict:
     # ── array functions ───────────────────────────────────────────────────────
     def _implode(glue_or_arr, pieces=None):
         if pieces is None:            # implode($arr) one-argument form
-            return ''.join(str(p) for p in glue_or_arr)
-        return str(glue_or_arr).join(str(p) for p in pieces)
+            arr = glue_or_arr.values() if isinstance(glue_or_arr, dict) else glue_or_arr
+            return ''.join(str(p) for p in arr)
+        items = pieces.values() if isinstance(pieces, dict) else pieces
+        return str(glue_or_arr).join(str(p) for p in items)
 
     def _len(glue_or_arr):
         try:
@@ -118,8 +120,15 @@ def _make_php_builtins() -> dict:
                     result[len(result)] = v
         return result
 
-    def _array_map(fn, arr):             return list(map(fn, arr))
+    def _array_map(fn, arr):
+        if isinstance(arr, dict):
+            return list(map(fn, arr.values()))
+        return list(map(fn, arr))
     def _array_filter(arr, fn=None):
+        if isinstance(arr, dict):
+            if fn:
+                return {k: v for k, v in arr.items() if fn(v)}
+            return {k: v for k, v in arr.items() if v}
         return list(filter(fn, arr)) if fn else [x for x in arr if x]
     def _array_reverse(arr):             return list(reversed(arr))
     def _array_unique(arr):              return list(dict.fromkeys(arr))
