@@ -16,3 +16,6 @@ jobs:
 
       - name: Run tests
         run: make test
+
+      - name: Run examples
+        run: make examples > /dev/null

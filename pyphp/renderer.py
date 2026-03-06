@@ -180,12 +180,19 @@ def render(source: str, ctx: Context, filename: str = '<template>') -> str:
     def _require(path: str):
         before = set(scope)
         if path.endswith('.php'):
-            source = open(path, encoding='utf-8').read()
+            with open(path, encoding='utf-8') as fh:
+                source = fh.read()
+            # Pure-PHP files commonly omit the closing "?>". The tokenizer
+            # requires a closing tag to recognise the block; append a synthetic
+            # one so those files are compiled correctly.
+            if '<?php' in source and not source.rstrip().endswith('?>'):
+                source = source.rstrip() + '\n?>'
             tokens = tokenize(source)
             script_src = _tokens_to_python(tokens)
             exec(compile(script_src, path, 'exec'), scope)
         else:
-            exec(open(path).read(), scope)
+            with open(path, encoding='utf-8') as fh:
+                exec(fh.read(), scope)
         # mirror any new names as __name so $var in templates resolves them
         for k in set(scope) - before:
             if not k.startswith('_'):
