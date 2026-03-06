@@ -11,9 +11,10 @@ Public API:
     SimpleXMLElement      — PHP SimpleXML-compatible element wrapper
     simplexml_load_string — parse XML string → SimpleXMLElement
     simplexml_load_file   — parse XML file   → SimpleXMLElement
+    PHPError      — exception raised when PHP execution fails
 """
 
-from .renderer import Context, render, render_file, tokenize, E
+from .renderer import Context, render, render_file, tokenize, E, PHPError
 from .preprocessor import php_to_python
 from .simplexml import SimpleXMLElement, simplexml_load_string, simplexml_load_file
 
@@ -27,4 +28,5 @@ __all__ = [
     'SimpleXMLElement',
     'simplexml_load_string',
     'simplexml_load_file',
+    'PHPError',
 ]

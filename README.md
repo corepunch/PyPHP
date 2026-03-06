@@ -75,7 +75,9 @@ This is the canonical use case.  Suppose `model.xml` describes a set of structs:
 </model>
 ```
 
-A Python helper `model.py` loads it:
+You can write the model helper in **Python** or in **PHP** — both work the same way.
+
+#### Option 1 — Python model (`model.py`)
 
 ```python
 import xml.etree.ElementTree as ET
@@ -90,11 +92,39 @@ class Model:
         return [E(s) for s in self._root.findall("struct")]
 ```
 
-The template `header.php`.  Inside the template, `$argv[1]` is the first
-command-line argument — `model.xml` in the `run` command below:
+#### Option 2 — PHP model (`model.php`)
 
 ```php
-<?php require "model.py"; ?>
+<?php
+// PyPHP maps `use` to Python imports, so Python's xml.etree.ElementTree
+// is available here transparently — no PHP XML extension required.
+use xml\etree\ElementTree as ET;
+use pyphp\renderer as renderer;
+
+class Model {
+    public function __construct($path) {
+        $this->_root = ET::parse($path)->getroot();
+    }
+
+    public function structs() {
+        $elements = $this->_root->findall("struct");
+        $result = [];
+        foreach ($elements as $el) {
+            array_push($result, renderer::E($el));
+        }
+        return $result;
+    }
+}
+?>
+```
+
+The template `header.php`.  Inside the template, `$argv[1]` is the first
+command-line argument — `model.xml` in the `run` command below.  Swap
+`require "model.py"` for `require "model.php"` depending on which helper
+you chose:
+
+```php
+<?php require "model.py"; ?>  <?php /* or: require "model.php"; */ ?>
 <?php $model = new Model($argv[1]); ?>
 <?php foreach ($model->structs() as $struct): ?>
 typedef struct <?= $struct->name ?> <?= $struct->name ?>, *lp<?= $struct->name ?>;
@@ -189,6 +219,7 @@ ctx = Context(
 | Math functions | `abs()`, `ceil()`, `floor()`, `round()`, `pow()`, `sqrt()`, `max()`, `min()`, `rand()` | Available directly in templates |
 | Type-check / conversion helpers | `intval()`, `floatval()`, `strval()`, `is_array()`, `is_string()`, `is_int()`, `is_numeric()`, `isset()`, `empty()` | Available directly in templates |
 | JSON helpers | `json_encode()`, `json_decode()` | Available directly in templates |
+| Class definitions | `class Foo { ... }` | Supports constructors, instance methods, properties, inheritance (`extends`), `parent::`, static methods, and visibility modifiers (`public`, `private`, `protected`) |
 
 ---
 
@@ -200,7 +231,6 @@ The following PHP features are not currently translated and are on the roadmap:
 |---|---|---|
 | PHP ternary operator | `$a ? $b : $c` | ⏳ Planned (use Python `$b if $a else $c` for now) |
 | `switch` / `case` | `switch ($x) { case 1: ... }` | ⏳ Planned |
-| Class definitions | `class Foo { ... }` | ⏳ Planned |
 
 > **Tip:** Because the code inside `<?php ?>` tags is executed as Python, you can use any Python expression or built-in directly — `len()`, `range()`, `sorted()`, list comprehensions, etc.
 
