@@ -1037,6 +1037,75 @@ def _apply_php_concat(code: str) -> str:
     return ''.join(result)
 
 
+def _normalize_foreach(code: str) -> str:
+    """Collapse multi-line ``foreach (...)`` expressions into a single line.
+
+    The foreach regex uses ``.+?`` which does not cross newlines.  When the
+    iterable expression spans several lines (e.g. a multi-argument
+    ``array_filter(...)`` call), the regex fails to match.  This function
+    finds each ``foreach (`` block, tracks parenthesis depth to locate the
+    matching ``)``, and replaces any embedded newlines with spaces so that the
+    entire expression sits on one line.
+
+    String literals inside the expression are honored – newlines inside
+    strings are preserved as-is (though PHP does not allow bare newlines in
+    single-quoted or double-quoted strings, so this is mostly defensive).
+    """
+    result: list[str] = []
+    i = 0
+    n = len(code)
+
+    while i < n:
+        # Detect "foreach" at a word boundary.
+        if (code[i:i + 7] == 'foreach'
+                and (i == 0 or not (code[i - 1].isalnum() or code[i - 1] == '_'))
+                and (i + 7 >= n or not (code[i + 7].isalnum() or code[i + 7] == '_'))):
+            # Scan forward past optional whitespace to find the opening '('.
+            j = i + 7
+            while j < n and code[j] in (' ', '\t'):
+                j += 1
+            if j < n and code[j] == '(':
+                # Collect the "foreach" keyword and any whitespace up to '('.
+                result.append(code[i:j + 1])
+                depth = 1
+                k = j + 1
+                in_str: str | None = None
+                while k < n and depth > 0:
+                    ch = code[k]
+                    if in_str:
+                        if ch == '\\':
+                            result.append(ch)
+                            k += 1
+                            if k < n:
+                                result.append(code[k])
+                            k += 1
+                            continue
+                        if ch == in_str:
+                            in_str = None
+                        result.append(ch)
+                    elif ch in ('"', "'"):
+                        in_str = ch
+                        result.append(ch)
+                    elif ch == '\n':
+                        # Replace newline with a space to collapse the expression.
+                        result.append(' ')
+                    elif ch == '(':
+                        depth += 1
+                        result.append(ch)
+                    elif ch == ')':
+                        depth -= 1
+                        result.append(ch)
+                    else:
+                        result.append(ch)
+                    k += 1
+                i = k
+                continue
+        result.append(code[i])
+        i += 1
+
+    return ''.join(result)
+
+
 def _php_expr(expr: str) -> str:
     """Convert a PHP iterable expression to Python (used in foreach).
 
@@ -1100,6 +1169,9 @@ def php_to_python(code: str) -> str:
     code = _re_class_extends.sub(r'class \1(\2)', code)
     # 1. PHP elseif -> Python elif (before step 2 which normalises block headers)
     code = re.sub(r'\belseif\b', 'elif', code)
+    # 1b. Collapse multi-line foreach(...) expressions onto a single line so
+    #     the foreach regexes (which use .+? without re.DOTALL) can match them.
+    code = _normalize_foreach(code)
     # foreach — before $var so we still see $ in iterable expression
     code = _re_foreach_kv.sub(
         lambda m: f'for __{m.group(2)}, __{m.group(3)} in _items({_php_expr(m.group(1))}):',
