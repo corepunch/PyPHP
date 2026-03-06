@@ -57,6 +57,28 @@ class PHPError(Exception):
         return f'Generated Python script:\n{numbered}'
 
 
+# ── output writer ────────────────────────────────────────────────────────────
+
+class _OutWriter:
+    """Collects rendered output via write(*args).
+
+    Accepts multiple string arguments in a single call so that the generated
+    code can emit ``_out.write(a, b, c)`` instead of three separate
+    ``_out.write(a)`` / ``_out.write(b)`` / ``_out.write(c)`` calls.
+    """
+
+    __slots__ = ('_parts',)
+
+    def __init__(self):
+        self._parts: list[str] = []
+
+    def write(self, *args: str) -> None:
+        self._parts.extend(args)
+
+    def getvalue(self) -> str:
+        return ''.join(self._parts)
+
+
 # ── context ───────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -179,31 +201,43 @@ def _tokens_to_python(tokens: list) -> tuple[str, dict]:
                 line_map[py_lineno] = php_line
             lines.append(tab * indent + line)
 
-    for token in tokens:
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
         if isinstance(token, TextToken):
-            if token.text:
-                emit(f'_out.append({repr(token.text)})', php_line=token.php_line)
-        elif isinstance(token, ExprToken):
-            emit(f'_out.append(_eval({token.expr!r}))', php_line=token.php_line)
-        elif isinstance(token, CodeToken):
-            code = token.code.strip()
-            php_base = token.php_line
-            if _BLOCK_CLOSE.match(code):
-                indent = max(0, indent - 1)
-            elif code.startswith(('elif ', 'else', 'except', 'finally')):
-                indent = max(0, indent - 1)
-                emit(code, php_line=php_base)
-                indent += 1
-            elif _BLOCK_OPEN.match(code):
-                emit(code, php_line=php_base)
-                indent += 1
-            elif '\n' in code:
-                # Multi-line block: emit each sub-line with an incremented PHP line.
-                # Preserve _braces_to_indent indentation by not stripping sub-lines.
-                for offset, sub_line in enumerate(code.split('\n')):
-                    emit(sub_line, php_line=php_base + offset)
-            else:
-                emit(code, php_line=php_base)
+            # Collect consecutive TextTokens and emit a single _out.write() call.
+            # The inner loop advances i, so no further increment is needed here.
+            parts: list[str] = []
+            php_line = token.php_line
+            while i < len(tokens) and isinstance(tokens[i], TextToken):
+                if tokens[i].text:
+                    parts.append(repr(tokens[i].text))
+                i += 1
+            if parts:
+                emit(f'_out.write({", ".join(parts)})', php_line=php_line)
+        else:
+            if isinstance(token, ExprToken):
+                emit(f'_out.write(_eval({token.expr!r}))', php_line=token.php_line)
+            elif isinstance(token, CodeToken):
+                code = token.code.strip()
+                php_base = token.php_line
+                if _BLOCK_CLOSE.match(code):
+                    indent = max(0, indent - 1)
+                elif code.startswith(('elif ', 'else', 'except', 'finally')):
+                    indent = max(0, indent - 1)
+                    emit(code, php_line=php_base)
+                    indent += 1
+                elif _BLOCK_OPEN.match(code):
+                    emit(code, php_line=php_base)
+                    indent += 1
+                elif '\n' in code:
+                    # Multi-line block: emit each sub-line with an incremented PHP line.
+                    # Preserve _braces_to_indent indentation by not stripping sub-lines.
+                    for offset, sub_line in enumerate(code.split('\n')):
+                        emit(sub_line, php_line=php_base + offset)
+                else:
+                    emit(code, php_line=php_base)
+            i += 1
 
     return '\n'.join(lines), line_map
 
@@ -240,7 +274,7 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
             return enumerate(obj)
 
     scope['_items'] = _items
-    scope['_out']  = []
+    scope['_out']  = _OutWriter()
     scope['_eval'] = ctx.make_eval(scope)
 
     # _require(path) execs a file directly into the live scope —
@@ -274,7 +308,7 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
     # assert_renders(source, expected) — render a PHP snippet and assert its output.
     # Useful in test files to verify template rendering inline.
     def _assert_renders(source: str, expected: str) -> None:
-        result = render(source, Context())
+        result = render(source, Context(vars={}))
         assert result == expected, f'render output {result!r} != expected {expected!r}'
 
     scope['assert_renders']   = _assert_renders
@@ -298,7 +332,7 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
             php_lineno = py_lineno or 1
         raise PHPError(e, php_file=filename, php_line=php_lineno, python_script=script) from e
 
-    return ''.join(scope['_out'])
+    return scope['_out'].getvalue()
 
 
 def render_file(path: str | Path, ctx: Context, developer: bool = False) -> str:
