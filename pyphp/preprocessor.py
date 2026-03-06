@@ -1016,29 +1016,29 @@ def php_to_python(code: str) -> str:
     code = _split_inline_blocks(code)
     # 3. new ClassName( -> ClassName(
     code = _re_new.sub(r'\1(', code)
-    # 4a. PHP concatenation assignment .= -> +=  (before the bare-dot step)
+    # 4. PHP concatenation assignment .= -> +=  (before the bare-dot step)
     code = _sub_outside_strings(_re_concat_assign, '+=', code)
-    # 4b. Normalize echo(expr) -> echo expr so the concat step below can process it.
+    # 4a. Normalize echo(expr) -> echo expr so the concat step below can process it.
     #     In PHP, echo(expr) is echo applied to a parenthesised expression; the parens
     #     do not make it a function call.  We strip them here so _apply_php_concat sees
     #     the naked expression and can convert any . chains inside it.
     code = re.sub(r'^(\s*)echo\s*\((.+)\)\s*;?\s*$', r'\1echo \2', code, flags=re.MULTILINE)
-    # 4c. PHP string concatenation: $a . $b -> _cat($a, $b)
+    # 4b. PHP string concatenation: $a . $b -> _cat($a, $b)
     #     _cat coerces all args to str (PHP semantics); runs before -> is converted to .
     code = _apply_php_concat(code)
-    # 4d. PHP use statement -> Python import (after concat: backslash-paths survive concat;
+    # 4c. PHP use statement -> Python import (after concat: backslash-paths survive concat;
     #     the resulting dot-paths must not be present when _apply_php_concat runs)
     code = _re_use.sub(_use_repl, code)
-    # 4e. $this -> self  (must run before -> to . so $this->prop becomes self.prop)
+    # 4d. $this -> self  (must run before -> to . so $this->prop becomes self.prop)
     code = _sub_outside_strings(_re_this, 'self', code)
-    # 4f. PHP logical-NOT operator: !expr -> not expr  (outside strings)
+    # 4e. PHP logical-NOT operator: !expr -> not expr  (outside strings)
     #     Must NOT match != (inequality); the negative lookahead (?!=) ensures this.
     code = _sub_outside_strings(_re_not, 'not ', code)
-    # 4g. PHP strict equality/inequality: !== -> !=  and  === -> ==  (outside strings)
+    # 4f. PHP strict equality/inequality: !== -> !=  and  === -> ==  (outside strings)
     #     !== must be replaced before === so the leading ! is not misread.
     code = _sub_outside_strings(_re_strict_neq, '!=', code)
     code = _sub_outside_strings(_re_strict_eq, '==', code)
-    # 4h. PHP logical AND/OR: && -> and,  || -> or  (outside strings)
+    # 4g. PHP logical AND/OR: && -> and,  || -> or  (outside strings)
     code = _sub_outside_strings(_re_logical_and, 'and', code)
     code = _sub_outside_strings(_re_logical_or, 'or', code)
     # 5. -> to .  outside strings
