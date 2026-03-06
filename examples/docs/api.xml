@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<api lib="pyphp" version="1.0">
+  <functions>
+    <function name="render"
+              signature="render(source, ctx)"
+              description="Render a PHP template string and return the output as a string."
+              returns="str"
+              example='render(source, Context(vars={"name": "world"}))'>
+      <param name="source" type="str"     description="PHP template source code"/>
+      <param name="ctx"    type="Context" description="Holds template variables and optional output filters"/>
+    </function>
+    <function name="render_file"
+              signature="render_file(path, ctx)"
+              description="Load a .php template from disk and render it."
+              returns="str"
+              example='render_file("page.php", Context(vars={"title": "Hello"}))'>
+      <param name="path" type="str | Path" description="Path to the .php template file"/>
+      <param name="ctx"  type="Context"    description="Holds template variables and optional output filters"/>
+    </function>
+    <function name="php_to_python"
+              signature="php_to_python(code)"
+              description="Translate a snippet of PHP code to equivalent Python."
+              returns="str"
+              example='php_to_python(&apos;strtolower(implode(", ", ["a", "b"]))&apos;)'>
+      <param name="code" type="str" description="Raw PHP code string (without template tags)"/>
+    </function>
+  </functions>
+  <classes>
+    <class name="Context"
+           description="Holds the variables and filters passed to a template.">
+      <attr name="vars"    type="dict[str, Any]"      description="Template variables, accessed as PHP variables inside templates"/>
+      <attr name="filters" type="dict[str, Callable]" description="Named post-processing functions for output expressions"/>
+    </class>
+    <class name="E"
+           description="Wraps an xml.etree.ElementTree.Element for dot-access of attributes in templates.">
+      <attr name="(any XML attribute)" type="str" description="Read directly as a property: el-&gt;name, el-&gt;type, etc."/>
+    </class>
+  </classes>
+</api>

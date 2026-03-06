@@ -478,10 +478,14 @@ def _apply_php_concat(code: str) -> str:
 
 
 def _php_expr(expr: str) -> str:
-    """Convert a PHP iterable expression to Python (used in foreach)."""
+    """Convert a PHP iterable expression to Python (used in foreach).
+
+    Note: -> is intentionally left unconverted here.  _apply_php_concat (step 4c)
+    must run before -> is turned into . so it never mistakes method-access dots for
+    PHP concatenation operators.  Step 5 in php_to_python handles -> -> . afterwards.
+    """
     expr = expr.strip()
     expr = _re_new.sub(r'\1(', expr)
-    expr = expr.replace('->', '.')
     expr = _re_var.sub(r'__\1', expr)
     return expr
 

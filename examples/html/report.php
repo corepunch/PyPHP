@@ -1,17 +1,9 @@
+<?php require "examples/html/weather.py"; ?>
 <?php
-$title = 'Sales Report — Q1 2024';
-$summary = [
-    {"label": "Total Units",   "value": "5,570"},
-    {"label": "Total Revenue", "value": '$142,400'},
-    {"label": "Top Product",   "value": "Gadget X"},
-];
-$headers = ["Product", "Units", "Revenue", "Margin"];
-$rows = [
-    ["Widget A",  "1,200",  '$24,000', "38%"],
-    ["Widget B",    "850",  '$17,000', "42%"],
-    ["Gadget X",  "3,100",  '$93,000', "61%"],
-    ["Gadget Y",    "420",   '$8,400', "55%"],
-];
+$title   = "Weather Report — " . report_date;
+$rows    = fetch_weather();
+$summary = weather_summary($rows);
+$headers = ["City", "Temperature", "Wind", "Condition"];
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -55,9 +47,10 @@ $rows = [
     <tbody>
 <?php foreach ($rows as $row): ?>
       <tr>
-<?php foreach ($row as $cell): ?>
-        <td><?= $cell ?></td>
-<?php endforeach ?>
+        <td><?= $row["city"] ?></td>
+        <td><?= $row["temp_c"] ?></td>
+        <td><?= $row["wind_kmh"] ?></td>
+        <td><?= $row["condition"] ?></td>
       </tr>
 <?php endforeach ?>
     </tbody>
