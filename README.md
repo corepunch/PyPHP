@@ -219,6 +219,7 @@ ctx = Context(
 | Math functions | `abs()`, `ceil()`, `floor()`, `round()`, `pow()`, `sqrt()`, `max()`, `min()`, `rand()` | Available directly in templates |
 | Type-check / conversion helpers | `intval()`, `floatval()`, `strval()`, `is_array()`, `is_string()`, `is_int()`, `is_numeric()`, `isset()`, `empty()` | Available directly in templates |
 | JSON helpers | `json_encode()`, `json_decode()` | Available directly in templates |
+| Class definitions | `class Foo { ... }` | Supports constructors, instance methods, properties, inheritance (`extends`), `parent::`, static methods, and visibility modifiers (`public`, `private`, `protected`) |
 
 ---
 
@@ -230,7 +231,6 @@ The following PHP features are not currently translated and are on the roadmap:
 |---|---|---|
 | PHP ternary operator | `$a ? $b : $c` | ⏳ Planned (use Python `$b if $a else $c` for now) |
 | `switch` / `case` | `switch ($x) { case 1: ... }` | ⏳ Planned |
-| Class definitions | `class Foo { ... }` | ⏳ Planned |
 
 > **Tip:** Because the code inside `<?php ?>` tags is executed as Python, you can use any Python expression or built-in directly — `len()`, `range()`, `sorted()`, list comprehensions, etc.
 
