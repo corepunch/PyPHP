@@ -152,6 +152,7 @@ struct Point {
     float y;
 };
 
+
 typedef struct Rect Rect, *lpRect;
 struct Rect {
     Point origin;
@@ -183,6 +184,21 @@ ctx = Context(
 
 ---
 
+## PHP Version Compatibility
+
+PyPHP is **roughly PHP 5.x compatible with selective PHP 8.0 string functions**. It supports most core PHP 5 OOP features plus some modern PHP 8.0 string functions, but it's not aiming for 100% compatibility with any specific version.
+
+**What's supported:**
+- ✅ PHP 4.0+ control structures (`foreach`, type casting, `parent::`)
+- ✅ PHP 5.0+ OOP features (visibility modifiers, static methods, class inheritance, constructors)
+- ✅ PHP 8.0 string functions (`str_contains()`, `str_starts_with()`, `str_ends_with()`)
+
+**What's planned:**
+- ⏳ Ternary operator (`$a ? $b : $c`)
+- ⏳ `switch`/`case` statements
+
+---
+
 ## Supported PHP Features
 
 | Feature | Syntax | Notes |
@@ -208,7 +224,8 @@ ctx = Context(
 | HTML comment stripping | `<!-- ... -->` | Stripped before parsing |
 | `$argv` | `$argv[1]` | Command-line arguments (index 0 = first real arg) |
 | XML dot-access wrapper | `E` class | Lets `$el->attr` work on XML elements |
-| String interpolation | `"Hello $name"`, `"Item $arr[0]"`, `"{$name}"` | Double-quoted strings with `$var` become Python f-strings |
+| String interpolation | `"Hello $name"`, `"Item $arr[0]"`, `"{
+name}"` | Double-quoted strings with `$var` become Python f-strings |
 | String concatenation | `$a . $b`, `$a .= $b` | Coerces both sides to string (mixed types safe) |
 | `include` / `require_once` / `include_once` | `include "file.php"` | Alias for `require`; executes file in current scope |
 | Type casting | `(int)$x`, `(float)$x`, `(string)$x`, `(bool)$x` | Mapped to `int()`, `float()`, `str()`, `bool()` |
