@@ -29,3 +29,6 @@ examples:
 	@echo ""
 	@echo "=== Book Catalog / SimpleXML (examples/simplexml/catalog.php) ==="
 	@$(PYTHON) -m pyphp $(EXAMPLES_DIR)/simplexml/catalog.php
+	@echo ""
+	@echo "=== CLI options / getopt (examples/getopt/greet.php) ==="
+	@$(PYTHON) -m pyphp $(EXAMPLES_DIR)/getopt/greet.php --user=World --greeting=Hello

@@ -10,6 +10,7 @@ import math
 import json
 import random
 import re
+import sys as _sys
 
 from .simplexml import simplexml_load_string, simplexml_load_file
 
@@ -163,6 +164,129 @@ def _make_php_builtins() -> dict:
     def _empty(x):
         return x in (None, False, 0, 0.0, '', '0', [], {})
 
+    # ── CLI argument parsing ───────────────────────────────────────────────────
+    def _getopt(shortopts='', longopts=None):
+        """Emulate PHP's getopt(): parse command-line options.
+
+        shortopts  -- string of short option chars; ':' suffix means required value,
+                      '::' suffix means optional value (returned as '' when absent).
+        longopts   -- list of long option names; ':' suffix means required value,
+                      '::' suffix means optional value.
+
+        Returns a dict mapping option name (without leading dashes) to its value,
+        or False when the option takes no argument (matching PHP's behaviour).
+        Unrecognised options and non-option arguments are silently ignored.
+        """
+        if longopts is None:
+            longopts = []
+
+        # Build lookup tables: name -> 'none' | 'required' | 'optional'
+        short_map: dict = {}
+        i = 0
+        so = shortopts
+        while i < len(so):
+            ch = so[i]
+            if i + 2 < len(so) and so[i + 1:i + 3] == '::':
+                short_map[ch] = 'optional'
+                i += 3
+            elif i + 1 < len(so) and so[i + 1] == ':':
+                short_map[ch] = 'required'
+                i += 2
+            else:
+                short_map[ch] = 'none'
+                i += 1
+
+        long_map: dict = {}
+        for opt in longopts:
+            if opt.endswith('::'):
+                long_map[opt[:-2]] = 'optional'
+            elif opt.endswith(':'):
+                long_map[opt[:-1]] = 'required'
+            else:
+                long_map[opt] = 'none'
+
+        args = _sys.argv[1:]  # argv[0] is the script path, already stripped
+        result: dict = {}
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if arg == '--':
+                break
+            if arg.startswith('--'):
+                # long option: --name or --name=value
+                part = arg[2:]
+                if '=' in part:
+                    name, val = part.split('=', 1)
+                    if name in long_map:
+                        result[name] = val
+                else:
+                    name = part
+                    kind = long_map.get(name)
+                    if kind == 'required' and idx + 1 < len(args):
+                        idx += 1
+                        result[name] = args[idx]
+                    elif kind == 'optional':
+                        result[name] = ''
+                    elif kind == 'none':
+                        result[name] = False
+            elif arg.startswith('-') and len(arg) > 1:
+                # short options: -abc or -u value
+                j = 1
+                while j < len(arg):
+                    ch = arg[j]
+                    kind = short_map.get(ch)
+                    if kind is None:
+                        j += 1
+                        continue
+                    if kind == 'none':
+                        result[ch] = False
+                        j += 1
+                    elif kind == 'required':
+                        rest = arg[j + 1:]
+                        if rest:
+                            result[ch] = rest
+                        elif idx + 1 < len(args):
+                            idx += 1
+                            result[ch] = args[idx]
+                        break
+                    elif kind == 'optional':
+                        rest = arg[j + 1:]
+                        result[ch] = rest  # empty string if not provided inline
+                        break
+            idx += 1
+        return result
+
+    def _php_isset(*fns):
+        """Safe isset(): each argument is a zero-argument callable (lambda).
+
+        Returns True only when every lambda executes without raising an exception
+        and its return value is not None.  This emulates PHP's isset() which
+        returns False (without error) when an array key does not exist.
+        """
+        for fn in fns:
+            try:
+                if fn() is None:
+                    return False
+            except (KeyError, IndexError, TypeError, AttributeError):
+                return False
+        return True
+
+    def _php_coalesce(*fns):
+        """Emulate PHP's null-coalescing operator ``??``.
+
+        Each argument is a zero-argument callable (lambda).  Returns the value of
+        the first lambda that executes without error and yields a non-None result.
+        Falls back to None if all lambdas are exhausted.
+        """
+        for fn in fns:
+            try:
+                v = fn()
+                if v is not None:
+                    return v
+            except (KeyError, IndexError, TypeError, AttributeError):
+                pass
+        return None
+
     # ── hashing ───────────────────────────────────────────────────────────────
     def _hash(algo, data, raw_output=False):
         import hashlib
@@ -272,7 +396,11 @@ def _make_php_builtins() -> dict:
         'is_null':             lambda x: x is None,
         'is_numeric':          _is_numeric,
         'isset':               lambda *a: all(x is not None for x in a),
+        '_php_isset':          _php_isset,
+        '_php_coalesce':       _php_coalesce,
         'empty':               _empty,
+        # CLI argument parsing
+        'getopt':              _getopt,
         # serialisation
         'json_encode':         lambda x, flags=0: json.dumps(x),
         'json_decode':         lambda x, assoc=False: json.loads(x),

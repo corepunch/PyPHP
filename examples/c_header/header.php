@@ -1,5 +1,13 @@
 <?php require "examples/c_header/model.php"; ?>
-<?php $model = new Model($argv[1]); ?>
+<?php
+$options = getopt("f:", ["file:"]);
+$file = $options['file'] ?? $options['f'] ?? null;
+if (!$file) {
+    echo "Usage: python3 -m pyphp examples/c_header/header.php --file=model.xml\n";
+    exit(1);
+}
+$model = new Model($file);
+?>
 <?php $structs = $model->structs(); ?>
 #pragma once
 #include <stdint.h>
