@@ -382,7 +382,7 @@ def _rewrite_isset(code: str) -> str:
             continue
 
         # Check for 'isset(' at this position
-        if code[i:i + 6] == 'isset(' or code[i:i + 6] == 'isset(':
+        if code[i:i + 6] == 'isset(':
             # Make sure it's a word boundary (not 'my_isset(')
             if i > 0 and (code[i - 1].isalnum() or code[i - 1] == '_'):
                 result.append(c)
@@ -543,8 +543,8 @@ def _find_assignment_end(code: str) -> int | None:
         if depth == 0 and ch == '=':
             prev = code[i - 1] if i > 0 else ''
             nxt  = code[i + 1] if i + 1 < n else ''
-            # Skip ==, !=, <=, >=, =>
-            if nxt == '=' or prev in ('!', '<', '>', '='):
+            # Skip ==, !=, <=, >=, => and augmented right-hand =>, += etc.
+            if nxt in ('=', '>') or prev in ('!', '<', '>', '='):
                 i += 1
                 continue
             # Augmented assignments (+=, -=, *=, /=, .=) — still an assignment

@@ -78,6 +78,9 @@ class _OutWriter:
     def getvalue(self) -> str:
         return ''.join(self._parts)
 
+    def clear(self) -> None:
+        self._parts.clear()
+
 
 # ── context ───────────────────────────────────────────────────────────────────
 
@@ -316,7 +319,7 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
         if buffered:
             _sys.stdout.write(buffered)
             _sys.stdout.flush()
-            scope['_out']._parts.clear()   # prevent double-write after return
+            scope['_out'].clear()   # prevent double-write after return
         _sys.exit(code)
 
     scope['exit']    = _php_exit
