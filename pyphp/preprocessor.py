@@ -78,6 +78,13 @@ _BRACE_INDENT = '    '
 _re_brace_block_open  = re.compile(r'^(for|if|elif|else|with|while|try|except|finally|def|class)\b.*:$')
 _re_brace_block_close = re.compile(r'^(end|endforeach|endif|endwhile|endfor|endelse)\s*;?\s*$')
 
+# First words that can open an indented block when a line ends with `{`.
+# Anything else (e.g. `x = {`, `return {`) is a dict/set literal, not a block.
+_BLOCK_OPENER_KEYWORDS = frozenset({
+    'for', 'if', 'elif', 'else', 'while', 'with',
+    'try', 'except', 'finally', 'def', 'class',
+})
+
 # PHP class support
 # class Foo extends Bar  ->  class Foo(Bar)
 _re_class_extends = re.compile(r'\bclass\s+(\w+)\s+extends\s+(\w+)')
@@ -649,6 +656,9 @@ def _braces_to_indent(code: str) -> str:
     # Index 0 represents module level (not a class).
     _class_stack: list[bool] = [False]
     _next_staticmethod = False
+    # Tracks the depth of non-block { } pairs (dict/set literals).  When > 0
+    # a standalone `}` closes the literal rather than an indentation block.
+    lit_depth = 0
 
     for line in lines:
         stripped = line.strip()
@@ -684,7 +694,11 @@ def _braces_to_indent(code: str) -> str:
 
         # Standalone closing brace — ends a block, not emitted
         if stripped in ('}', '};'):
-            if depth > 0:
+            if lit_depth > 0:
+                # Closing a dict/set literal — emit the brace and keep indentation.
+                lit_depth -= 1
+                result.append(_BRACE_INDENT * depth + stripped)
+            elif depth > 0:
                 depth -= 1
                 if len(_class_stack) > 1:
                     _class_stack.pop()
@@ -700,10 +714,18 @@ def _braces_to_indent(code: str) -> str:
             _class_stack.append(False)
             continue
 
-        # Line ending with { — block opener (e.g. `def foo():` already has :,
-        # or `if (__x > 0)` needs one appended)
+        # Line ending with { — either a block opener (def/if/for/class …) or
+        # the start of a multi-line dict/set literal (x = {, return {, …).
+        # Only treat it as a block opener when the first word is a known
+        # control-flow / definition keyword; everything else is a literal.
         if stripped.endswith('{'):
             content = stripped[:-1].rstrip()
+            first_word = (content.split() or [''])[0]
+            if first_word not in _BLOCK_OPENER_KEYWORDS:
+                # Dict/set literal opening brace — pass through and track depth.
+                lit_depth += 1
+                result.append(_BRACE_INDENT * depth + stripped)
+                continue
             is_class = content.startswith('class ')
             if not content.endswith(':'):
                 content += ':'

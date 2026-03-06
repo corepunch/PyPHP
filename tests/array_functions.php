@@ -25,3 +25,20 @@
 <?php assert(implode(",", $doubled) == "20,40,60") ?>
 <?php $akeys = array_keys($assoc); ?>
 <?php assert(implode(",", $akeys) == "a,b,c") ?>
+<?php
+// Multi-line associative array with object values — array_map must receive
+// the VALUES (objects), not the keys (strings), so ->tag works correctly.
+class FieldType {
+    public $tag;
+    public function __construct($tag) {
+        $this->tag = $tag;
+    }
+}
+$parsers = [
+    "x" => new FieldType("float"),
+    "n" => new FieldType("int"),
+    "s" => new FieldType("string"),
+];
+$tags = array_map(fn($v) => $v->tag, $parsers);
+assert(implode(", ", $tags) == "float, int, string");
+?>
