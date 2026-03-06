@@ -1,4 +1,4 @@
-<?php require "examples/c_header/model.py"; ?>
+<?php require "examples/c_header/model.php"; ?>
 <?php $model = new Model($argv[1]); ?>
 <?php $structs = $model->structs(); ?>
 #pragma once

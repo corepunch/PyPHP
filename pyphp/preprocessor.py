@@ -487,8 +487,8 @@ def _php_expr(expr: str) -> str:
 
 
 def _rewrite_require(path: str) -> str:
-    """Swap .php -> .py; keep any other extension as-is."""
-    return path[:-4] + '.py' if path.endswith('.php') else path
+    """Keep the path as-is; .php files are processed at runtime by _require."""
+    return path
 
 
 def php_to_python(code: str) -> str:

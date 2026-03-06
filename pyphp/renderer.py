@@ -175,9 +175,17 @@ def render(source: str, ctx: Context, filename: str = '<template>') -> str:
     # _require(path) execs a file directly into the live scope —
     # same behaviour as PHP require: variables defined in the file
     # are immediately visible to the caller.
+    # .php files are compiled through the PHP pipeline first; all other
+    # extensions are executed as raw Python.
     def _require(path: str):
         before = set(scope)
-        exec(open(path).read(), scope)
+        if path.endswith('.php'):
+            source = open(path, encoding='utf-8').read()
+            tokens = tokenize(source)
+            script_src = _tokens_to_python(tokens)
+            exec(compile(script_src, path, 'exec'), scope)
+        else:
+            exec(open(path).read(), scope)
         # mirror any new names as __name so $var in templates resolves them
         for k in set(scope) - before:
             if not k.startswith('_'):
