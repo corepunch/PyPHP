@@ -124,6 +124,56 @@ def _sub_outside_strings(pattern, repl, code):
     return ''.join(result)
 
 
+def _split_top_level_commas(s: str) -> list[str]:
+    """Split *s* on commas that are not inside parentheses, brackets, or strings.
+
+    Used to parse the argument list of a multi-value ``echo`` statement:
+    ``echo "a", foo(1, 2), $x`` → ``['"a"', 'foo(1, 2)', '__x']``
+    """
+    args: list[str] = []
+    depth = 0
+    in_string: str | None = None
+    buf: list[str] = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if in_string:
+            buf.append(c)
+            if c == '\\':
+                i += 1
+                if i < len(s):
+                    buf.append(s[i])
+            elif c == in_string:
+                in_string = None
+        elif c in ('"', "'"):
+            in_string = c
+            buf.append(c)
+        elif c in ('(', '[', '{'):
+            depth += 1
+            buf.append(c)
+        elif c in (')', ']', '}'):
+            depth -= 1
+            buf.append(c)
+        elif c == ',' and depth == 0:
+            args.append(''.join(buf).strip())
+            buf = []
+        else:
+            buf.append(c)
+        i += 1
+    tail = ''.join(buf).strip()
+    if tail:
+        args.append(tail)
+    return args
+
+
+def _echo_repl(m: re.Match) -> str:
+    """Convert an ``echo`` statement to one ``_out.write(str(a), str(b), …)`` call."""
+    raw = m.group(1).strip()
+    args = _split_top_level_commas(raw)
+    str_args = ', '.join(f'str({a})' for a in args if a)
+    return f'_out.write({str_args})'
+
+
 def _braces_to_indent(code: str) -> str:
     """Convert PHP brace-delimited blocks to Python indentation.
 
@@ -634,12 +684,12 @@ def php_to_python(code: str) -> str:
     )
     # 8d. Rename PHP constructor to Python constructor
     code = re.sub(r'\bdef\s+__construct\b', 'def __init__', code)
-    # 9. echo -> _out.append(str(expr))  — works in all positions (MULTILINE)
-    #    This replaces the old "strip echo" behaviour and makes echo produce output
-    #    everywhere, including inside function bodies.
+    # 9. echo -> _out.write(str(a), str(b), …)  — works in all positions (MULTILINE)
+    #    Supports comma-separated echo arguments:
+    #      echo "hello", "world"  ->  _out.write(str("hello"), str("world"))
     code = re.sub(
         r'^\s*echo\s*(.+?)[ \t]*;?[ \t]*$',
-        lambda m: f'_out.append(str({m.group(1).strip()}))',
+        _echo_repl,
         code,
         flags=re.MULTILINE,
     )
