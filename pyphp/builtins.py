@@ -11,6 +11,8 @@ import json
 import random
 import re
 
+from .simplexml import simplexml_load_string, simplexml_load_file
+
 
 def _make_php_builtins() -> dict:
     """Build a dict of common PHP built-in functions mapped to Python equivalents."""
@@ -276,6 +278,9 @@ def _make_php_builtins() -> dict:
         'json_decode':         lambda x, assoc=False: json.loads(x),
         # hashing
         'hash':                _hash,
+        # xml
+        'simplexml_load_string': simplexml_load_string,
+        'simplexml_load_file':   simplexml_load_file,
         # internal: used by the PHP-concat translator (not called directly by templates)
         '_cat':                lambda *args: ''.join(str(a) for a in args),
     }
