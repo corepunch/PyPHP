@@ -80,6 +80,15 @@ def _make_php_builtins() -> dict:
             return ''.join(str(p) for p in glue_or_arr)
         return str(glue_or_arr).join(str(p) for p in pieces)
 
+    def _len(glue_or_arr):
+        try:
+            return len(glue_or_arr)
+        except TypeError:
+            count = 0
+            for _ in glue_or_arr:
+                count += 1
+            return count
+    
     def _explode(delimiter, string, limit=None):
         if limit is not None:
             return str(string).split(str(delimiter), limit - 1)
@@ -219,7 +228,7 @@ def _make_php_builtins() -> dict:
         'strip_tags':          _strip_tags,
         'str_split':           _str_split,
         # array
-        'count':               len,
+        'count':               _len,
         'implode':             _implode,
         'join':                _implode,
         'explode':             _explode,
