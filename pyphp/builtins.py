@@ -122,7 +122,7 @@ def _make_php_builtins() -> dict:
 
     def _array_map(fn, arr):
         if isinstance(arr, dict):
-            return {k: fn(v) for k, v in arr.items()}
+            return list(map(fn, arr.values()))
         return list(map(fn, arr))
     def _array_filter(arr, fn=None):
         if isinstance(arr, dict):
