@@ -158,10 +158,13 @@ def render(source: str, ctx: Context, filename: str = '<template>') -> str:
     for k, v in ctx.vars.items():
         scope[k] = v
         scope[f'__{k}'] = v
-    # _items(): foreach ($x as $k => $v) works on both dicts and lists
+    # _items(): foreach ($x as $k => $v) works on both dicts and lists.
+    # Use isinstance(dict) rather than hasattr('items') so that objects whose
+    # __getattr__ proxy happens to return a truthy 'items' child (e.g.
+    # SimpleXMLElementList) are not incorrectly treated as mappings.
     def _items(obj):
         import types
-        if hasattr(obj, 'items'):
+        if isinstance(obj, dict):
             return obj.items()
         elif isinstance(obj, types.GeneratorType):
             return obj
