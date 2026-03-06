@@ -6,11 +6,13 @@ built-in functions (string, array, math, type, serialisation, hashing) as
 Python callables, and the pre-built _PHP_BUILTINS singleton.
 """
 
+import itertools
 import math
 import json
 import random
 import re
 import sys as _sys
+import types as _types
 
 from .simplexml import simplexml_load_string, simplexml_load_file
 
@@ -75,12 +77,39 @@ def _make_php_builtins() -> dict:
                          .replace('\x00', thousands_sep))
         return formatted
 
+    # ── array/generator helpers ───────────────────────────────────────────────
+    def _to_array(arg):
+        """Materialise a generator or iterator into a list or dict.
+
+        * list / dict pass through unchanged.
+        * generators / iterators: peek at the first item; if it is a 2-tuple
+          (key, value) pair, materialise as a dict; otherwise as a list.
+        * Any other type is returned unchanged.
+        """
+        if isinstance(arg, (list, dict)):
+            return arg
+        if isinstance(arg, _types.GeneratorType) or (
+            hasattr(arg, '__iter__') and not isinstance(arg, (str, bytes))
+        ):
+            it = iter(arg)
+            try:
+                first = next(it)
+            except StopIteration:
+                return []
+            rest = itertools.chain([first], it)
+            if isinstance(first, tuple) and len(first) == 2:
+                return dict(rest)
+            return list(rest)
+        return arg
+
     # ── array functions ───────────────────────────────────────────────────────
     def _implode(glue_or_arr, pieces=None):
         if pieces is None:            # implode($arr) one-argument form
-            arr = glue_or_arr.values() if isinstance(glue_or_arr, dict) else glue_or_arr
+            arr = _to_array(glue_or_arr)
+            arr = arr.values() if isinstance(arr, dict) else arr
             return ''.join(str(p) for p in arr)
-        items = pieces.values() if isinstance(pieces, dict) else pieces
+        items = _to_array(pieces)
+        items = items.values() if isinstance(items, dict) else items
         return str(glue_or_arr).join(str(p) for p in items)
 
     def _len(glue_or_arr):
@@ -97,15 +126,18 @@ def _make_php_builtins() -> dict:
             return str(string).split(str(delimiter), limit - 1)
         return str(string).split(str(delimiter))
 
-    def _in_array(needle, haystack):        return needle in haystack
-    def _array_key_exists(key, arr):        return key in arr
+    def _in_array(needle, haystack):        return needle in _to_array(haystack)
+    def _array_key_exists(key, arr):        return key in _to_array(arr)
     def _array_keys(arr):
+        arr = _to_array(arr)
         return list(arr.keys()) if hasattr(arr, 'keys') else list(range(len(arr)))
     def _array_values(arr):
+        arr = _to_array(arr)
         return list(arr.values()) if hasattr(arr, 'values') else list(arr)
 
     def _array_merge(*args):
         # PHP re-indexes numeric arrays: merge([1,2],[3,4]) -> [1,2,3,4]
+        args = tuple(_to_array(a) for a in args)
         if all(isinstance(a, list) for a in args):
             result_list: list = []
             for a in args:
@@ -121,17 +153,19 @@ def _make_php_builtins() -> dict:
         return result
 
     def _array_map(fn, arr):
+        arr = _to_array(arr)
         if isinstance(arr, dict):
             return list(map(fn, arr.values()))
         return list(map(fn, arr))
     def _array_filter(arr, fn=None):
+        arr = _to_array(arr)
         if isinstance(arr, dict):
             if fn:
                 return {k: v for k, v in arr.items() if fn(v)}
             return {k: v for k, v in arr.items() if v}
         return list(filter(fn, arr)) if fn else [x for x in arr if x]
-    def _array_reverse(arr):             return list(reversed(arr))
-    def _array_unique(arr):              return list(dict.fromkeys(arr))
+    def _array_reverse(arr):             return list(reversed(_to_array(arr)))
+    def _array_unique(arr):              return list(dict.fromkeys(_to_array(arr)))
     def _array_push(arr, *vals):         arr.extend(vals); return len(arr)
     def _array_pop(arr):                 return arr.pop()
     def _array_shift(arr):               return arr.pop(0)
@@ -140,21 +174,25 @@ def _make_php_builtins() -> dict:
             arr.insert(0, v)
         return len(arr)
     def _array_slice(arr, offset, length=None, _pk=False):
+        arr = _to_array(arr)
         return arr[offset : offset + length] if length is not None else arr[offset:]
     def _array_chunk(arr, size, _pk=False):
+        arr = _to_array(arr)
         return [arr[i : i + size] for i in range(0, len(arr), size)]
-    def _array_sum(arr):                 return sum(arr)
+    def _array_sum(arr):                 return sum(_to_array(arr))
     def _array_flip(arr):
+        arr = _to_array(arr)
         if hasattr(arr, 'items'):
             return {v: k for k, v in arr.items()}
         return {v: k for k, v in enumerate(arr)}
     def _array_search(needle, haystack):
+        haystack = _to_array(haystack)
         items = haystack.items() if hasattr(haystack, 'items') else enumerate(haystack)
         for k, v in items:
             if v == needle:
                 return k
         return False
-    def _array_combine(keys, values):    return dict(zip(keys, values))
+    def _array_combine(keys, values):    return dict(zip(_to_array(keys), _to_array(values)))
     def _array_fill(start_index, num, value):
         return {start_index + i: value for i in range(num)}
     def _sort(arr):                      arr.sort(); return True
@@ -406,6 +444,7 @@ def _make_php_builtins() -> dict:
         'strval':              str,
         'boolval':             bool,
         'is_array':            lambda x: isinstance(x, (list, dict)),
+        'is_iterable':         lambda x: isinstance(x, (list, dict, _types.GeneratorType)) or hasattr(x, '__iter__'),
         'is_string':           lambda x: isinstance(x, str),
         'is_int':              lambda x: isinstance(x, int) and not isinstance(x, bool),
         'is_integer':          lambda x: isinstance(x, int) and not isinstance(x, bool),
