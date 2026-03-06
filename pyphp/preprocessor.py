@@ -174,6 +174,385 @@ def _echo_repl(m: re.Match) -> str:
     return f'_out.write({str_args})'
 
 
+def _convert_php_arrays(code: str) -> str:
+    """Convert PHP array literals and array() calls to Python dicts or lists.
+
+    Rules:
+    * ``['key' => val, ...]``  →  ``{'key': val, ...}``   (dict)
+    * ``['a', 'b']``           →  ``['a', 'b']``           (plain list, unchanged)
+    * ``array('key' => val)``  →  ``{'key': val}``         (dict)
+    * ``array('a', 'b')``      →  ``['a', 'b']``           (list)
+
+    A bracket pair that contains a top-level ``=>`` is treated as an associative
+    array and converted to a Python dict.  All other bracket pairs are left as
+    Python lists.  The function handles nested arrays recursively.
+    """
+    result: list[str] = []
+    i = 0
+    n = len(code)
+    in_str: str | None = None
+
+    def _convert_inner(body: str) -> tuple[str, bool]:
+        """Convert the *body* of a [...] or array(...) block.
+
+        Returns ``(converted_body, is_dict)`` where *is_dict* is True when the
+        body contained a top-level ``=>`` and has been rewritten using ``:``
+        as the separator.
+        """
+        parts: list[str] = []
+        cur: list[str] = []
+        depth2 = 0
+        j = 0
+        m2 = len(body)
+        s: str | None = None
+        has_arrow = False
+
+        while j < m2:
+            ch = body[j]
+            if s:
+                cur.append(ch)
+                if ch == '\\':
+                    j += 1
+                    if j < m2:
+                        cur.append(body[j])
+                elif ch == s:
+                    s = None
+                j += 1
+                continue
+            if ch in ('"', "'"):
+                s = ch
+                cur.append(ch)
+                j += 1
+                continue
+            if ch in ('(', '[', '{'):
+                depth2 += 1
+                cur.append(ch)
+                j += 1
+                continue
+            if ch in (')', ']', '}'):
+                depth2 -= 1
+                cur.append(ch)
+                j += 1
+                continue
+            # Top-level => is a key-value separator
+            if depth2 == 0 and ch == '=' and j + 1 < m2 and body[j + 1] == '>':
+                has_arrow = True
+                cur.append(':')
+                j += 2
+                # skip optional whitespace after =>
+                while j < m2 and body[j] == ' ':
+                    cur.append(body[j])
+                    j += 1
+                continue
+            cur.append(ch)
+            j += 1
+
+        inner = ''.join(cur)
+        # Recursively convert any nested PHP arrays in the inner body
+        inner = _convert_php_arrays(inner)
+        return inner, has_arrow
+
+    while i < n:
+        c = code[i]
+
+        # Protect string literals
+        if in_str:
+            result.append(c)
+            if c == '\\':
+                i += 1
+                if i < n:
+                    result.append(code[i])
+            elif c == in_str:
+                in_str = None
+            i += 1
+            continue
+
+        if c in ('"', "'"):
+            in_str = c
+            result.append(c)
+            i += 1
+            continue
+
+        # Detect 'array(' call
+        if code[i:i + 6] == 'array(' and (i == 0 or not (code[i - 1].isalnum() or code[i - 1] == '_')):
+            # Find matching ')'
+            paren_start = i + 6
+            depth3 = 1
+            k = paren_start
+            s3: str | None = None
+            while k < n and depth3 > 0:
+                ch = code[k]
+                if s3:
+                    if ch == '\\':
+                        k += 1
+                    elif ch == s3:
+                        s3 = None
+                elif ch in ('"', "'"):
+                    s3 = ch
+                elif ch in ('(', '[', '{'):
+                    depth3 += 1
+                elif ch in (')', ']', '}'):
+                    depth3 -= 1
+                k += 1
+            body = code[paren_start: k - 1]
+            inner, is_dict = _convert_inner(body)
+            if is_dict:
+                result.append('{')
+                result.append(inner)
+                result.append('}')
+            else:
+                result.append('[')
+                result.append(inner)
+                result.append(']')
+            i = k
+            continue
+
+        # Detect '[' — potential array literal
+        if c == '[':
+            # Find the matching ']'
+            bracket_start = i + 1
+            depth4 = 1
+            k = bracket_start
+            s4: str | None = None
+            while k < n and depth4 > 0:
+                ch = code[k]
+                if s4:
+                    if ch == '\\':
+                        k += 1
+                    elif ch == s4:
+                        s4 = None
+                elif ch in ('"', "'"):
+                    s4 = ch
+                elif ch == '[':
+                    depth4 += 1
+                elif ch == ']':
+                    depth4 -= 1
+                k += 1
+            body = code[bracket_start: k - 1]
+            inner, is_dict = _convert_inner(body)
+            if is_dict:
+                result.append('{')
+                result.append(inner)
+                result.append('}')
+            else:
+                result.append('[')
+                result.append(inner)
+                result.append(']')
+            i = k
+            continue
+
+        result.append(c)
+        i += 1
+
+    return ''.join(result)
+
+
+def _rewrite_isset(code: str) -> str:
+    """Rewrite ``isset(expr1, expr2, ...)`` to ``_php_isset(lambda: expr1, lambda: expr2, ...)``.
+
+    This prevents KeyError / IndexError when testing whether an array key is set,
+    mirroring PHP's isset() which returns False for missing keys without raising.
+    Each argument is wrapped in a zero-argument lambda so the expression is only
+    evaluated inside _php_isset's try/except guard.
+    """
+    result: list[str] = []
+    i = 0
+    n = len(code)
+    in_string: str | None = None
+
+    while i < n:
+        c = code[i]
+
+        # Track string literals so we don't match 'isset' inside them.
+        if in_string:
+            result.append(c)
+            if c == '\\':
+                i += 1
+                if i < n:
+                    result.append(code[i])
+            elif c == in_string:
+                in_string = None
+            i += 1
+            continue
+
+        if c in ('"', "'"):
+            in_string = c
+            result.append(c)
+            i += 1
+            continue
+
+        # Check for 'isset(' at this position
+        if code[i:i + 6] == 'isset(' or code[i:i + 6] == 'isset(':
+            # Make sure it's a word boundary (not 'my_isset(')
+            if i > 0 and (code[i - 1].isalnum() or code[i - 1] == '_'):
+                result.append(c)
+                i += 1
+                continue
+            # Find the matching closing paren
+            paren_start = i + 6  # position just after '('
+            depth = 1
+            j = paren_start
+            j_in_str: str | None = None
+            while j < n and depth > 0:
+                ch = code[j]
+                if j_in_str:
+                    if ch == '\\':
+                        j += 1
+                    elif ch == j_in_str:
+                        j_in_str = None
+                elif ch in ('"', "'"):
+                    j_in_str = ch
+                elif ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                j += 1
+            # code[paren_start : j-1] is the argument list
+            args_str = code[paren_start: j - 1]
+            args = _split_top_level_commas(args_str)
+            lambda_args = ', '.join(f'lambda: {a.strip()}' for a in args if a.strip())
+            result.append(f'_php_isset({lambda_args})')
+            i = j
+            continue
+
+        result.append(c)
+        i += 1
+
+    return ''.join(result)
+
+
+def _rewrite_null_coalesce(code: str) -> str:
+    """Rewrite PHP null-coalescing ``??`` chains to Python equivalents.
+
+    PHP:    ``$a ?? $b ?? $default``
+    Python: ``_php_coalesce(lambda: $a, lambda: $b, lambda: $default)``
+
+    Because ``??`` is safe even when the left operand would raise a KeyError
+    (e.g. ``$arr['key'] ?? null``), each operand is wrapped in a zero-argument
+    lambda so _php_coalesce can evaluate them inside a try/except guard.
+
+    For assignment statements the rewrite only affects the right-hand side:
+        ``$x = $a ?? $b``  →  ``$x = _php_coalesce(lambda: $a, lambda: $b)``
+    """
+    if '??' not in code:
+        return code  # fast path
+
+    def _split_on_null_coalesce(s: str) -> list[str]:
+        """Split *s* on top-level ``??`` tokens, preserving string literals and
+        bracket nesting."""
+        segments: list[str] = []
+        current: list[str] = []
+        idx = 0
+        n = len(s)
+        depth = 0
+        in_str: str | None = None
+        while idx < n:
+            ch = s[idx]
+            if in_str:
+                current.append(ch)
+                if ch == '\\':
+                    idx += 1
+                    if idx < n:
+                        current.append(s[idx])
+                elif ch == in_str:
+                    in_str = None
+                idx += 1
+                continue
+            if ch in ('"', "'"):
+                in_str = ch
+                current.append(ch)
+                idx += 1
+                continue
+            if ch in ('(', '[', '{'):
+                depth += 1
+                current.append(ch)
+                idx += 1
+                continue
+            if ch in (')', ']', '}'):
+                depth -= 1
+                current.append(ch)
+                idx += 1
+                continue
+            if depth == 0 and ch == '?' and idx + 1 < n and s[idx + 1] == '?':
+                segments.append(''.join(current).strip())
+                current = []
+                idx += 2
+                continue
+            current.append(ch)
+            idx += 1
+        segments.append(''.join(current).strip())
+        return segments
+
+    def _rewrite_expr(expr: str) -> str:
+        """Rewrite a single expression that may contain top-level ``??``."""
+        # Preserve any trailing semicolons so the overall statement structure survives.
+        stripped = expr.rstrip()
+        suffix = ''
+        if stripped.endswith(';'):
+            suffix = ';'
+            stripped = stripped.rstrip(';').rstrip()
+        segs = _split_on_null_coalesce(stripped)
+        if len(segs) == 1:
+            return expr
+        lambda_segs = ', '.join(f'lambda: {s}' for s in segs)
+        return f'_php_coalesce({lambda_segs}){suffix}'
+
+    # Detect an assignment prefix: "lhs = " where = is not ==, !=, <=, >=, =>
+    # We look for the first top-level bare = sign in *code*.
+    assign_end = _find_assignment_end(code)
+    if assign_end is not None:
+        lhs = code[:assign_end]
+        rhs = code[assign_end:]
+        return lhs + _rewrite_expr(rhs)
+    return _rewrite_expr(code)
+
+
+def _find_assignment_end(code: str) -> int | None:
+    """Return the index of the character *after* the ``=`` in a top-level
+    assignment, or None if no plain assignment exists in the code.
+
+    Skips ``==``, ``!=``, ``<=``, ``>=``, ``=>`` so only bare ``=`` and
+    augmented assignments (``+=``, ``-=``, etc.) are considered.
+    """
+    n = len(code)
+    depth = 0
+    in_str: str | None = None
+    i = 0
+    while i < n:
+        ch = code[i]
+        if in_str:
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            in_str = ch
+            i += 1
+            continue
+        if ch in ('(', '[', '{'):
+            depth += 1
+            i += 1
+            continue
+        if ch in (')', ']', '}'):
+            depth -= 1
+            i += 1
+            continue
+        if depth == 0 and ch == '=':
+            prev = code[i - 1] if i > 0 else ''
+            nxt  = code[i + 1] if i + 1 < n else ''
+            # Skip ==, !=, <=, >=, =>
+            if nxt == '=' or prev in ('!', '<', '>', '='):
+                i += 1
+                continue
+            # Augmented assignments (+=, -=, *=, /=, .=) — still an assignment
+            return i + 1
+        i += 1
+    return None
+
+
 def _braces_to_indent(code: str) -> str:
     """Convert PHP brace-delimited blocks to Python indentation.
 
@@ -512,6 +891,20 @@ def _apply_php_concat(code: str) -> str:
                 flush_chain()
                 result.append(ch)
 
+        # ── PHP line comment: flush chain, append rest of line as-is ────────
+        elif ch == '/' and i + 1 < n and code[i + 1] == '/' and depth == 0:
+            flush_current()
+            flush_chain()
+            # Find end of line
+            end = code.find('\n', i)
+            if end == -1:
+                result.append(code[i:])
+                i = n
+            else:
+                result.append(code[i:end])
+                i = end
+            continue
+
         # ── potential concat dot ───────────────────────────────────────────────
         elif ch == '.' and depth == 0:
             prev_ch = code[i - 1] if i > 0 else ''
@@ -608,6 +1001,13 @@ def php_to_python(code: str) -> str:
         lambda m: f'for __{m.group(2)} in {_php_expr(m.group(1))}:',
         code
     )
+    # 1a. Convert PHP array literals and array() calls to Python dicts / lists.
+    #     ['key' => val]  →  {'key': val}  (associative / dict)
+    #     ['a', 'b']      →  ['a', 'b']    (sequential / list, unchanged)
+    #     array(k => v)   →  {k: v}
+    #     Runs after foreach so the '=>' in 'foreach ($a as $k => $v)' is already
+    #     consumed and won't be mistaken for an array element separator.
+    code = _convert_php_arrays(code)
     # ensure for/if/while/with blocks always end with : even if omitted in source
     code = re.sub(r'^(for|if|elif|while|with)\b(.+?)\s*:?$', r'\1\2:', code.strip())
     # 2. endif/endforeach/endwhile/endfor -> end
@@ -684,6 +1084,20 @@ def php_to_python(code: str) -> str:
     )
     # 8d. Rename PHP constructor to Python constructor
     code = re.sub(r'\bdef\s+__construct\b', 'def __init__', code)
+    # 8e. Null-coalescing operator: $a ?? $b  ->  _php_coalesce(lambda: __a, lambda: __b)
+    #     Runs after step 8 ($var → __var) and after step 7 (// → #) so that lambdas
+    #     capture __-prefixed names and PHP comment lines are already # comments.
+    #     Processed line-by-line; lines that are pure Python comments are skipped.
+    code = '\n'.join(
+        _rewrite_null_coalesce(line) if '??' in line and not line.lstrip().startswith('#')
+        else line
+        for line in code.splitlines()
+    )
+    # 8f. isset(expr1, expr2, ...) -> _php_isset(lambda: expr1, lambda: expr2, ...)
+    #     Must run after $var -> __var (step 8) so the lambdas capture __-prefixed names.
+    #     Each argument is wrapped in a lambda so that KeyError / IndexError on array
+    #     access does not propagate — _php_isset catches it and returns False instead.
+    code = _rewrite_isset(code)
     # 9. echo -> _out.write(str(a), str(b), …)  — works in all positions (MULTILINE)
     #    Supports comma-separated echo arguments:
     #      echo "hello", "world"  ->  _out.write(str("hello"), str("world"))

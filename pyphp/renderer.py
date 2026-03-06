@@ -308,6 +308,22 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
 
     scope['_require'] = _require
 
+    # PHP exit() / die(): flush the output buffer to stdout *before* terminating.
+    # Without this wrapper, SystemExit propagates up and the _OutWriter buffer is
+    # discarded, causing all output before exit() to be silently lost.
+    def _php_exit(code: int = 0) -> None:
+        buffered = scope['_out'].getvalue()
+        if buffered:
+            _sys.stdout.write(buffered)
+            _sys.stdout.flush()
+            scope['_out']._parts.clear()   # prevent double-write after return
+        _sys.exit(code)
+
+    scope['exit']    = _php_exit
+    scope['__exit']  = _php_exit
+    scope['die']     = _php_exit
+    scope['__die']   = _php_exit
+
     # assert_renders(source, expected) — render a PHP snippet and assert its output.
     # Useful in test files to verify template rendering inline.
     def _assert_renders(source: str, expected: str) -> None:
