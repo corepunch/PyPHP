@@ -26,3 +26,6 @@ examples:
 	@echo ""
 	@echo "=== API Docs (examples/docs/api.php) ==="
 	@$(PYTHON) -m pyphp $(EXAMPLES_DIR)/docs/api.php
+	@echo ""
+	@echo "=== Book Catalog / SimpleXML (examples/simplexml/catalog.php) ==="
+	@$(PYTHON) -m pyphp $(EXAMPLES_DIR)/simplexml/catalog.php

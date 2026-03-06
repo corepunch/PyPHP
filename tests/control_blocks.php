@@ -96,6 +96,25 @@ while ($n > 0) {
     $n -= 1;
 }
 assert($total == 10);
+// ── ! (logical NOT) operator ────────────────────────────────────────────────
+
+$flag = false;
+assert(!$flag);
+assert(!false);
+
+$empty = [];
+assert(!in_array("x", $empty));
+
+if (!$flag) {
+    $notResult = "negated";
+} else {
+    $notResult = "unchanged";
+}
+assert($notResult == "negated");
+
+// != (inequality) must still work correctly (not broken by the ! -> not step)
+assert(1 != 2);
+assert("a" != "b");
 ?>
 
 <?php $tItems = ["x", "y", "z"]; ?>

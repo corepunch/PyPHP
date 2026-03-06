@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog>
+  <book id="1" genre="programming" available="true">
+    <title>The Pragmatic Programmer</title>
+    <author>David Thomas &amp; Andrew Hunt</author>
+    <year>2019</year>
+    <pages>352</pages>
+    <price>49.95</price>
+    <tags>
+      <tag>best-practices</tag>
+      <tag>craftsmanship</tag>
+      <tag>career</tag>
+    </tags>
+  </book>
+  <book id="2" genre="systems" available="true">
+    <title>The Linux Programming Interface</title>
+    <author>Michael Kerrisk</author>
+    <year>2010</year>
+    <pages>1556</pages>
+    <price>79.99</price>
+    <tags>
+      <tag>linux</tag>
+      <tag>systems</tag>
+      <tag>reference</tag>
+    </tags>
+  </book>
+  <book id="3" genre="programming" available="false">
+    <title>Structure and Interpretation of Computer Programs</title>
+    <author>Abelson &amp; Sussman</author>
+    <year>1996</year>
+    <pages>657</pages>
+    <price>65.00</price>
+    <tags>
+      <tag>classic</tag>
+      <tag>functional</tag>
+      <tag>education</tag>
+    </tags>
+  </book>
+  <book id="4" genre="algorithms" available="true">
+    <title>Introduction to Algorithms</title>
+    <author>Cormen, Leiserson, Rivest &amp; Stein</author>
+    <year>2022</year>
+    <pages>1312</pages>
+    <price>94.00</price>
+    <tags>
+      <tag>algorithms</tag>
+      <tag>data-structures</tag>
+      <tag>reference</tag>
+    </tags>
+  </book>
+  <book id="5" genre="systems" available="true">
+    <title>Computer Networks</title>
+    <author>Andrew S. Tanenbaum</author>
+    <year>2021</year>
+    <pages>960</pages>
+    <price>85.00</price>
+    <tags>
+      <tag>networking</tag>
+      <tag>protocols</tag>
+      <tag>systems</tag>
+    </tags>
+  </book>
+</catalog>

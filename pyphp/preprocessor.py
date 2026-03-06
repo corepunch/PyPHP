@@ -88,6 +88,8 @@ _re_this = re.compile(r'\$this\b')
 _re_parent_call = re.compile(r'\bparent::(\w+)\s*\(')
 # Used by _inject_self_into_def to parse "def name(params)..." lines
 _re_def_params = re.compile(r'^(def\s+\w+\s*\()([^)]*)(\).*)$')
+# PHP logical-NOT operator: ! -> not  (negative lookahead avoids != / !==)
+_re_not = re.compile(r'!(?!=)')
 
 
 def _inject_self_into_def(content: str) -> str:
@@ -478,10 +480,17 @@ def _apply_php_concat(code: str) -> str:
 
 
 def _php_expr(expr: str) -> str:
-    """Convert a PHP iterable expression to Python (used in foreach)."""
+    """Convert a PHP iterable expression to Python (used in foreach).
+
+    Note: ``->`` is intentionally *not* converted to ``.`` here.  Step 5 of
+    ``php_to_python`` does that conversion after ``_apply_php_concat`` has
+    already run.  Converting early would produce a bare dot at depth 0 which
+    ``_apply_php_concat`` would misidentify as a PHP string-concatenation
+    operator (e.g. ``foreach ($xml->book as $b)`` would become
+    ``_cat(for __b in __xml, book:)`` instead of ``for __b in __xml.book:``).
+    """
     expr = expr.strip()
     expr = _re_new.sub(r'\1(', expr)
-    expr = expr.replace('->', '.')
     expr = _re_var.sub(r'__\1', expr)
     return expr
 
@@ -568,6 +577,9 @@ def php_to_python(code: str) -> str:
     code = _re_use.sub(_use_repl, code)
     # 4e. $this -> self  (must run before -> to . so $this->prop becomes self.prop)
     code = _sub_outside_strings(_re_this, 'self', code)
+    # 4f. PHP logical-NOT operator: !expr -> not expr  (outside strings)
+    #     Must NOT match != (inequality); the negative lookahead (?!=) ensures this.
+    code = _sub_outside_strings(_re_not, 'not ', code)
     # 5. -> to .  outside strings
     code = _sub_outside_strings(re.compile(r'->'), '.', code)
     # 6. true/false/null  outside strings
