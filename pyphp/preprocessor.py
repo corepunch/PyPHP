@@ -420,6 +420,88 @@ def _rewrite_isset(code: str) -> str:
     return ''.join(result)
 
 
+def _convert_arrow_functions(code: str) -> str:
+    """Convert PHP arrow functions to Python lambda expressions.
+
+    PHP ``fn(params) => expr`` is rewritten to ``lambda params: expr``.
+
+    This step runs after ``$var → __var`` substitution (step 8) so that
+    parameter names already carry the ``__`` prefix.  String literals are
+    skipped to avoid false matches inside quoted text.
+    """
+    result: list[str] = []
+    i = 0
+    n = len(code)
+    in_string: str | None = None
+
+    while i < n:
+        c = code[i]
+
+        # Track string literals so we don't match 'fn' inside them.
+        if in_string:
+            result.append(c)
+            if c == '\\':
+                i += 1
+                if i < n:
+                    result.append(code[i])
+            elif c == in_string:
+                in_string = None
+            i += 1
+            continue
+
+        if c in ('"', "'"):
+            in_string = c
+            result.append(c)
+            i += 1
+            continue
+
+        # Check for the 'fn' keyword at a word boundary followed by '('
+        if (c == 'f' and i + 1 < n and code[i + 1] == 'n'
+                and (i == 0 or not (code[i - 1].isalnum() or code[i - 1] == '_'))
+                and (i + 2 >= n or not (code[i + 2].isalnum() or code[i + 2] == '_'))):
+            # Scan past optional whitespace to find the opening '('
+            j = i + 2
+            while j < n and code[j].isspace():
+                j += 1
+            if j < n and code[j] == '(':
+                # Find the matching ')' for the parameter list
+                paren_start = j + 1
+                depth = 1
+                k = paren_start
+                k_in_str: str | None = None
+                while k < n and depth > 0:
+                    ch = code[k]
+                    if k_in_str:
+                        if ch == '\\':
+                            k += 1
+                        elif ch == k_in_str:
+                            k_in_str = None
+                    elif ch in ('"', "'"):
+                        k_in_str = ch
+                    elif ch == '(':
+                        depth += 1
+                    elif ch == ')':
+                        depth -= 1
+                    k += 1
+                # k now points to just after the closing ')'
+                params = code[paren_start:k - 1]
+                # Check if followed by '=>' (with optional whitespace)
+                rest_start = k
+                while rest_start < n and code[rest_start].isspace():
+                    rest_start += 1
+                if (rest_start + 1 < n
+                        and code[rest_start] == '='
+                        and code[rest_start + 1] == '>'):
+                    result.append(f'lambda {params}:')
+                    i = rest_start + 2
+                    continue
+
+        result.append(c)
+        i += 1
+
+    return ''.join(result)
+
+
 def _rewrite_null_coalesce(code: str) -> str:
     """Rewrite PHP null-coalescing ``??`` chains to Python equivalents.
 
@@ -1095,6 +1177,9 @@ def php_to_python(code: str) -> str:
     #     Each argument is wrapped in a lambda so that KeyError / IndexError on array
     #     access does not propagate — _php_isset catches it and returns False instead.
     code = _rewrite_isset(code)
+    # 8g. PHP arrow functions: fn($x) => expr -> lambda __x: expr
+    #     Must run after step 8 ($var -> __var) so parameters carry the __ prefix.
+    code = _convert_arrow_functions(code)
     # 9. echo -> _out.write(str(a), str(b), …)  — works in all positions (MULTILINE)
     #    Supports comma-separated echo arguments:
     #      echo "hello", "world"  ->  _out.write(str("hello"), str("world"))
