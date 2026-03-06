@@ -50,9 +50,10 @@ Or individually:
 
 | Example | Command | Output |
 |---------|---------|--------|
-| **C header generation** from an XML model | `python3 -m pyphp examples/c_header/header.php examples/c_header/model.xml` | A `.h` file with `typedef` / `struct` declarations |
+| **C header generation** from an XML model | `python3 -m pyphp examples/c_header/header.php --file=examples/c_header/model.xml` | A `.h` file with `typedef` / `struct` declarations |
 | **HTML weather report** fetched from open-meteo.com | `python3 -m pyphp examples/html/report.php` | A styled HTML page with live weather for several cities |
 | **Markdown API docs** generated from an XML definition file | `python3 -m pyphp examples/docs/api.php` | A Markdown reference document |
+| **CLI option parsing** with `getopt()` and `isset()` | `python3 -m pyphp examples/getopt/greet.php --user=World` | Demonstrates `getopt`, `isset`, and `??` |
 
 ---
 
@@ -118,14 +119,21 @@ class Model {
 ?>
 ```
 
-The template `header.php`.  Inside the template, `$argv[1]` is the first
-command-line argument — `model.xml` in the `run` command below.  Swap
-`require "model.py"` for `require "model.php"` depending on which helper
-you chose:
+The template `header.php`.  Use `getopt()` to accept the model file path as a
+named `--file` argument.  Swap `require "model.py"` for `require "model.php"`
+depending on which helper you chose:
 
 ```php
-<?php require "model.py"; ?>  <?php /* or: require "model.php"; */ ?>
-<?php $model = new Model($argv[1]); ?>
+<?php require "model.py"; ?>
+<?php
+$options = getopt("f:", ["file:"]);
+$file = $options['file'] ?? $options['f'] ?? null;
+if (!$file) {
+    echo "Usage: python3 -m pyphp header.php --file=model.xml\n";
+    exit(1);
+}
+$model = new Model($file);
+?>
 <?php foreach ($model->structs() as $struct): ?>
 typedef struct <?= $struct->name ?> <?= $struct->name ?>, *lp<?= $struct->name ?>;
 struct <?= $struct->name ?> {
@@ -140,7 +148,7 @@ struct <?= $struct->name ?> {
 Run it:
 
 ```
-python pyphp.py header.php model.xml
+python3 -m pyphp header.php --file=model.xml
 ```
 
 Output:
@@ -159,6 +167,52 @@ struct Rect {
     Point size;
 };
 ```
+
+---
+
+### Parsing CLI options with `getopt()`
+
+Use `getopt()` to accept named command-line options in any script:
+
+```php
+<?php
+$options = getopt("u:p:", ["user:", "password:", "help"]);
+
+// Show help if --help is given or no options were passed
+if (isset($options['help']) || empty($options)) {
+    echo "Usage: php file.php [OPTIONS]\n";
+    echo "Options:\n";
+    echo "  -u, --user=NAME      Username (required)\n";
+    echo "  -p, --password=PASS  Password (required)\n";
+    echo "  --help               Show this help message\n";
+    exit(0);
+}
+
+// Prefer long option; fall back to the short alias
+$user = $options['user'] ?? $options['u'] ?? null;
+$pass = $options['password'] ?? $options['p'] ?? null;
+
+if (!$user || !$pass) {
+    echo "Error: Missing required arguments\n\n";
+    echo "Usage: php file.php --user=NAME --password=PASS\n";
+    exit(1);
+}
+
+echo "Running with user: $user\n";
+?>
+```
+
+Run it:
+
+```
+python3 -m pyphp file.php --user=alice --password=secret
+# Running with user: alice
+```
+
+Key points:
+- `getopt("u:p:", ["user:", "password:", "help"])` — short options with `:` require a value; long options without `:` are boolean flags
+- `isset($options['help'])` — safely returns `false` for missing keys (no exception)
+- `$options['user'] ?? $options['u'] ?? null` — null-coalescing falls back safely through missing keys
 
 ---
 
@@ -222,10 +276,14 @@ PyPHP is **roughly PHP 5.x compatible with selective PHP 8.0 string functions**.
 | Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=` | Delegated to Python |
 | String output filters | `<?= $x \| filter ?>` | Custom post-processing functions |
 | HTML comment stripping | `<!-- ... -->` | Stripped before parsing |
-| `$argv` | `$argv[1]` | Command-line arguments (index 0 = first real arg) |
+| `$argv` | `$argv[0]`, `$argv[1]`, … | Command-line arguments; index 0 is the first real arg (script path is stripped) |
+| `getopt()` | `getopt("u:h", ["user:", "help"])` | Parses short (`-u val`) and long (`--user=val`) CLI options; returns a dict |
+| `isset()` | `isset($x)`, `isset($arr['key'])` | Returns `false` (never throws) for undefined variables or missing array keys |
+| Null-coalescing operator | `$a ?? $b`, `$arr['key'] ?? $default` | Returns first non-`null` value; safe for missing array keys |
+| `exit()` / `die()` | `exit(0)`, `die(1)` | Flushes buffered output and exits with the given code |
+| Associative arrays | `['key' => value]`, `array('key' => value)` | Converted to Python dicts; plain `[...]` / `array(...)` stay as lists |
 | XML dot-access wrapper | `E` class | Lets `$el->attr` work on XML elements |
-| String interpolation | `"Hello $name"`, `"Item $arr[0]"`, `"{
-name}"` | Double-quoted strings with `$var` become Python f-strings |
+| String interpolation | `"Hello $name"`, `"Item $arr[0]"`, `"{name}"` | Double-quoted strings with `$var` become Python f-strings |
 | String concatenation | `$a . $b`, `$a .= $b` | Coerces both sides to string (mixed types safe) |
 | `include` / `require_once` / `include_once` | `include "file.php"` | Alias for `require`; executes file in current scope |
 | Type casting | `(int)$x`, `(float)$x`, `(string)$x`, `(bool)$x` | Mapped to `int()`, `float()`, `str()`, `bool()` |
