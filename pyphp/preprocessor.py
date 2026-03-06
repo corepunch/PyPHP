@@ -13,7 +13,6 @@ import re
 _re_foreach_kv = re.compile(r'foreach\s*\((.+?)\s+as\s+\$(\w+)\s*=>\s*\$(\w+)\s*\)[ \t]*:?')
 _re_foreach_v  = re.compile(r'foreach\s*\((.+?)\s+as\s+\$(\w+)\s*\)[ \t]*:?')
 _re_new        = re.compile(r'\bnew\s+([A-Za-z_]\w*)\s*\(')
-_re_count      = re.compile(r'\bcount\s*\(')
 _re_comment    = re.compile(r'(?<!:)//(.*)$', re.MULTILINE)
 _re_echo       = re.compile(r'^\s*echo\s+')
 _re_end        = re.compile(r'\b(endif|endforeach|endwhile|endfor)\b')
@@ -1017,8 +1016,6 @@ def php_to_python(code: str) -> str:
     code = _split_inline_blocks(code)
     # 3. new ClassName( -> ClassName(
     code = _re_new.sub(r'\1(', code)
-    # 4. count( -> len(  outside strings
-    code = _sub_outside_strings(_re_count, 'len(', code)
     # 4a. PHP concatenation assignment .= -> +=  (before the bare-dot step)
     code = _sub_outside_strings(_re_concat_assign, '+=', code)
     # 4b. Normalize echo(expr) -> echo expr so the concat step below can process it.
