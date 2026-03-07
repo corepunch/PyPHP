@@ -764,6 +764,74 @@ def _split_single_line_if(code: str) -> str:
     return '\n'.join(result)
 
 
+def _expand_single_line_func_bodies(code: str) -> str:
+    """Expand PHP single-line function bodies to multi-line brace form.
+
+    PHP:  function label() { return "(" . $x . ")"; }
+    →     function label() {
+              return "(" . $x . ")";
+          }
+
+    This must run *before* ``_apply_php_concat`` so that concat operators (``.``)
+    inside the function body are processed at depth 0 on their own line instead
+    of being treated as continuations of the function header.
+
+    Multi-statement bodies are split on ``;`` (respecting string literals and
+    nested parentheses) via :func:`_split_stmts`, each becoming its own indented
+    line.  :func:`_find_block_open` is used to locate the body-opening ``{``
+    correctly (skipping parens and string literals in the parameter list).
+    Both helpers are defined later in the module; Python resolves them at call
+    time, not at definition time.
+    """
+    _re_func_head = re.compile(
+        r'^(?:(?:public|private|protected|static|abstract)\s+)*'
+        r'function\s+\w+\s*\('
+    )
+    result = []
+    for line in code.splitlines():
+        stripped = line.strip()
+        # Quick reject: must have 'function', '{', and end with '}' or '};'
+        if (
+            'function' not in stripped
+            or '{' not in stripped
+            or not stripped.rstrip(';').endswith('}')
+        ):
+            result.append(line)
+            continue
+        if not _re_func_head.match(stripped):
+            result.append(line)
+            continue
+
+        # Find the '{' that opens the function body (skips param-list parens/strings).
+        # _find_block_open correctly handles escape sequences inside strings.
+        open_pos = _find_block_open(stripped)
+        if open_pos < 0:
+            result.append(line)
+            continue
+
+        after = stripped[open_pos + 1:]
+        after_rstripped = after.rstrip().rstrip(';').rstrip()
+        if not after_rstripped.endswith('}'):
+            result.append(line)
+            continue
+
+        body = after_rstripped[:-1].strip()
+        if not body:
+            result.append(line)  # empty body — handled by _re_func_empty
+            continue
+
+        leading = line[:len(line) - len(stripped)]
+        header = stripped[:open_pos + 1]   # includes the opening '{'
+        result.append(leading + header)
+        # _split_stmts splits on ';' respecting strings/parens/braces, handling
+        # escape sequences correctly.
+        for stmt in _split_stmts(body):
+            result.append(leading + '    ' + stmt)
+        result.append(leading + '}')
+
+    return '\n'.join(result)
+
+
 def _rewrite_catch(code: str) -> str:
     """Convert PHP catch clauses to Python except clauses.
 
@@ -792,6 +860,37 @@ def _rewrite_catch(code: str) -> str:
     code = re.sub(r'\bthrow\s+new\b', 'raise', code)
     code = re.sub(r'\bthrow\b', 'raise', code)
     return code
+
+
+def _rewrite_dynamic_props(code: str) -> str:
+    """Convert dynamic PHP property access ``self.$k`` to Python getattr/setattr.
+
+    After step 4d (``$this`` → ``self``) and step 5 (``->`` → ``.``), the PHP
+    pattern ``$this->$k`` becomes ``self.$k`` where ``$k`` still carries its
+    PHP ``$`` prefix.  This distinguishes it from a literal property name like
+    ``self._element`` (no ``$``).
+
+    Two forms are converted:
+
+    * **Assignment** ``self.$k = val``  → ``setattr(self, $k, val)``
+    * **Read**       ``self.$k``        → ``getattr(self, $k)``
+
+    Step 8 (``$var`` → ``__var``) then converts ``$k`` → ``__k``, giving the
+    final Python ``setattr(self, __k, val)`` / ``getattr(self, __k)``.
+    """
+    result = []
+    for line in code.splitlines():
+        # Assignment: self.$k = EXPR  (but not == or ===)
+        m = re.match(r'^(\s*)self\.\$(\w+)\s*=(?!=)\s*(.+)$', line)
+        if m:
+            indent, key, rhs = m.group(1), m.group(2), m.group(3)
+            rhs = rhs.rstrip().rstrip(';').rstrip()
+            result.append(f'{indent}setattr(self, ${key}, {rhs})')
+        else:
+            # Read: replace self.$k with getattr(self, $k)
+            line = re.sub(r'self\.\$(\w+)', r'getattr(self, $\1)', line)
+            result.append(line)
+    return '\n'.join(result)
 
 
 def _rewrite_define_const(code: str) -> str:
@@ -829,21 +928,50 @@ def _rewrite_array_push_shorthand(code: str) -> str:
 
 
 def _rewrite_increment_decrement(code: str) -> str:
-    """Convert standalone PHP increment/decrement operators to augmented assignment.
+    """Convert PHP increment/decrement operators to Python equivalents.
 
+    Standalone statements (whole line):
     __x++  ->  __x += 1
     ++__x  ->  __x += 1
     __x--  ->  __x -= 1
     --__x  ->  __x -= 1
 
-    Only replaces standalone occurrences (whole line or at line end before ;).
+    Expression context (inside function args, assignments, etc.):
+    __x++  ->  ((__x := __x + 1) - 1)   # post-increment: returns old value
+    __x--  ->  ((__x := __x - 1) + 1)   # post-decrement: returns old value
+    ++__x  ->  (__x := __x + 1)          # pre-increment: returns new value
+    --__x  ->  (__x := __x - 1)          # pre-decrement: returns new value
     """
-    # Post-increment/decrement: __x++ or __x--;  at end of statement
+    # Post-increment/decrement: __x++ or __x--;  at end of statement (standalone)
     code = re.sub(r'(?m)^(\s*)(__\w+)\+\+\s*;?\s*$', r'\1\2 += 1', code)
     code = re.sub(r'(?m)^(\s*)(__\w+)--\s*;?\s*$', r'\1\2 -= 1', code)
     # Pre-increment/decrement: ++__x or --__x as a standalone statement
     code = re.sub(r'(?m)^(\s*)\+\+(__\w+)\s*;?\s*$', r'\1\2 += 1', code)
     code = re.sub(r'(?m)^(\s*)--(__\w+)\s*;?\s*$', r'\1\2 -= 1', code)
+    # Expression-context post-increment: __x++ -> ((__x := __x + 1) - 1)
+    # Returns the old value while incrementing __x as a side-effect.
+    def _post_inc(m: re.Match) -> str:
+        v = m.group(1)
+        return f'(({v} := {v} + 1) - 1)'
+    code = re.sub(r'(__\w+)\+\+', _post_inc, code)
+    # Expression-context post-decrement: __x-- -> ((__x := __x - 1) + 1)
+    # Returns the old value while decrementing __x as a side-effect.
+    def _post_dec(m: re.Match) -> str:
+        v = m.group(1)
+        return f'(({v} := {v} - 1) + 1)'
+    code = re.sub(r'(__\w+)--', _post_dec, code)
+    # Expression-context pre-increment: ++__x -> (__x := __x + 1)
+    # Increments __x and returns the new value.
+    def _pre_inc(m: re.Match) -> str:
+        v = m.group(1)
+        return f'({v} := {v} + 1)'
+    code = re.sub(r'\+\+(__\w+)', _pre_inc, code)
+    # Expression-context pre-decrement: --__x -> (__x := __x - 1)
+    # Decrements __x and returns the new value.
+    def _pre_dec(m: re.Match) -> str:
+        v = m.group(1)
+        return f'({v} := {v} - 1)'
+    code = re.sub(r'--(__\w+)', _pre_dec, code)
     return code
 
 
@@ -1335,6 +1463,80 @@ def _find_assignment_end(code: str) -> int | None:
     return None
 
 
+def _find_block_open(s: str) -> int:
+    """Return the index of the first ``{`` not inside parentheses, brackets, or strings.
+
+    Used to locate the opening brace of an inline single-line block such as
+    ``def foo() { body; }`` where the ``{`` is not at the end of the line.
+    Returns -1 if no such brace is found.
+    """
+    depth = 0
+    in_str: str | None = None
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if in_str:
+            if c == '\\':
+                i += 2
+                continue
+            if c == in_str:
+                in_str = None
+        elif c in ('"', "'"):
+            in_str = c
+        elif c in ('(', '['):
+            depth += 1
+        elif c in (')', ']'):
+            depth -= 1
+        elif c == '{' and depth == 0:
+            return i
+        i += 1
+    return -1
+
+
+def _split_stmts(s: str) -> list[str]:
+    """Split *s* on ``;`` not inside parentheses, brackets, braces, or strings.
+
+    Used to break apart the body of an inline brace block such as
+    ``__a = 1; return __a`` into individual statements.
+    """
+    parts: list[str] = []
+    depth = 0
+    in_string: str | None = None
+    buf: list[str] = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if in_string:
+            buf.append(c)
+            if c == '\\':
+                i += 1
+                if i < len(s):
+                    buf.append(s[i])
+            elif c == in_string:
+                in_string = None
+        elif c in ('"', "'"):
+            in_string = c
+            buf.append(c)
+        elif c in ('(', '[', '{'):
+            depth += 1
+            buf.append(c)
+        elif c in (')', ']', '}'):
+            depth -= 1
+            buf.append(c)
+        elif c == ';' and depth == 0:
+            stmt = ''.join(buf).strip()
+            if stmt:
+                parts.append(stmt)
+            buf = []
+        else:
+            buf.append(c)
+        i += 1
+    tail = ''.join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
 def _braces_to_indent(code: str) -> str:
     """Convert PHP brace-delimited blocks to Python indentation.
 
@@ -1409,7 +1611,38 @@ def _braces_to_indent(code: str) -> str:
             _class_stack.append(False)
             continue
 
-        # Line ending with { — either a block opener (def/if/for/class …) or
+        # Inline single-line brace block: "def foo() { body; }" or "if cond { body }"
+        # The block opener keyword is followed by a body enclosed in { } all on one
+        # line.  Split into header + indented statements for Python.
+        if '{' in stripped and (stripped.endswith('}') or stripped.endswith('};')):
+            open_pos = _find_block_open(stripped)
+            if open_pos >= 0:
+                header = stripped[:open_pos].rstrip()
+                first_word = header.split(maxsplit=1)[0] if header.split() else ''
+                if first_word in _BLOCK_OPENER_KEYWORDS:
+                    close_str = stripped.rstrip(';').rstrip()
+                    close_pos = close_str.rfind('}')
+                    if close_pos > open_pos:
+                        body_raw = stripped[open_pos + 1:close_pos].strip()
+                        is_class = header.startswith('class ')
+                        if not header.endswith(':'):
+                            header += ':'
+                        if _class_stack[-1] and header.startswith('def ') and not _next_staticmethod:
+                            header = _inject_self_into_def(header)
+                        _next_staticmethod = False
+                        result.append(_BRACE_INDENT * depth + header)
+                        depth += 1
+                        _class_stack.append(is_class)
+                        stmts = _split_stmts(body_raw)
+                        if stmts:
+                            for stmt in stmts:
+                                result.append(_BRACE_INDENT * depth + stmt)
+                        else:
+                            result.append(_BRACE_INDENT * depth + 'pass')
+                        depth -= 1
+                        _class_stack.pop()
+                        continue
+
         # the start of a multi-line dict/set literal (x = {, return {, …).
         # Only treat it as a block opener when the first word is a known
         # control-flow / definition keyword; everything else (assignments,
@@ -1923,7 +2156,12 @@ def php_to_python(code: str) -> str:
     #     do not make it a function call.  We strip them here so _apply_php_concat sees
     #     the naked expression and can convert any . chains inside it.
     code = re.sub(r'^(\s*)echo\s*\((.+)\)\s*;?\s*$', r'\1echo \2', code, flags=re.MULTILINE)
-    # 4b. PHP string concatenation: $a . $b -> _cat($a, $b)
+    # 4b. Expand single-line function bodies before concat so that concat operators
+    #     inside the body are processed at the correct depth (not at depth 0 relative
+    #     to the function header).
+    #     function foo() { return "a" . $x; }  →  function foo() {\n    return "a" . $x;\n}
+    code = _expand_single_line_func_bodies(code)
+    # 4c. PHP string concatenation: $a . $b -> _cat($a, $b)
     #     _cat coerces all args to str (PHP semantics); runs before -> is converted to .
     code = _apply_php_concat(code)
     # 4c. PHP use statement -> Python import (after concat: backslash-paths survive concat;
@@ -1943,6 +2181,14 @@ def php_to_python(code: str) -> str:
     code = _sub_outside_strings(_re_logical_or, 'or', code)
     # 5. -> to .  outside strings
     code = _sub_outside_strings(re.compile(r'->'), '.', code)
+    # 5a. Dynamic property access: $this->$k (now self.$k after steps 4d+5).
+    #     self.$k still carries the PHP '$' prefix here, which makes it
+    #     distinguishable from literal property names (self._element, etc.).
+    #     Convert to setattr/getattr so the result is semantically correct once
+    #     step 8 ($var → __var) replaces $k with __k:
+    #       self.$k = val   →  setattr(self, $k, val)   → setattr(self, __k, val)
+    #       self.$k         →  getattr(self, $k)         → getattr(self, __k)
+    code = _rewrite_dynamic_props(code)
     # 6. true/false/null  outside strings
     code = _sub_outside_strings(_re_keywords, lambda m: _kw_map[m.group()], code)
     # 7. // comments -> #  (outside strings only)
