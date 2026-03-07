@@ -700,9 +700,27 @@ def _split_single_line_if(code: str) -> str:
     for line in lines:
         m = pat.match(line)
         if m:
+            # Verify that the captured condition has balanced parentheses.
+            # The regex is greedy and may match an inner ')' rather than the
+            # outer one closing the 'if (...)', which would give an unbalanced
+            # condition like 'isset($x["h"]'.  Skip such false matches.
+            cond_candidate = m.group(3)
+            depth = 0
+            balanced = True
+            for ch in cond_candidate:
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth < 0:
+                        balanced = False
+                        break
+            if not balanced or depth != 0:
+                result.append(line)
+                continue
             indent = m.group(1)
             kw = m.group(2)
-            cond = m.group(3)
+            cond = cond_candidate
             body = m.group(4).rstrip(';').strip()
             result.append(f'{indent}{kw} ({cond}) {{')
             result.append(f'{indent}    {body};')
