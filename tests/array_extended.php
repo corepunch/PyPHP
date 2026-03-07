@@ -65,9 +65,9 @@ assert($r == [0, 5, 10, 15, 20]);
 // ── compact ──────────────────────────────────────────────────────────────────
 
 // compact() works when variables are defined in scope before calling.
-// In PHP templates it's most practical to use it at the top level where
-// PHP $vars map to Python __vars in the exec scope.
-// We verify its behavior via direct dict construction (cross-compatible approach):
+// It is most practical to use it at the top level where
+// PHP vars map to Python __vars in the exec scope.
+// Verify behavior by checking the returned dict:
 $first = "John";
 $last = "Doe";
 $age = 30;

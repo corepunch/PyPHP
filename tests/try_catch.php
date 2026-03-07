@@ -37,7 +37,8 @@ try {
         throw new Exception("inner error");
     } catch (Exception $e) {
         $caught_msg = $e->getMessage();
-        throw new Exception("re-thrown: " . $caught_msg);
+        $rethrow_msg = "re-thrown: $caught_msg";
+        throw new Exception($rethrow_msg);
     }
 } catch (Exception $e) {
     $outer_msg = $e->getMessage();

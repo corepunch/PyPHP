@@ -438,6 +438,10 @@ def _rewrite_c_for_loops(code: str) -> str:
                             body_lines.append(bl)
                         j += 1
 
+                    # Recursively convert any nested for loops in the body
+                    body_text = _rewrite_c_for_loops('\n'.join(body_lines))
+                    body_lines = body_text.split('\n')
+
                     body_indent = indent + '    '
                     output.append(f'{indent}{init};')
                     output.append(f'{indent}while ({cond}) {{')
@@ -508,12 +512,19 @@ def _rewrite_do_while(code: str) -> str:
                     j += 1
                 j += 1  # skip the { line
 
-            # Collect until '} while (cond);'
+            # Collect until '} while (cond);' at the same brace depth
             while_cond = None
+            depth = 1
             while j < len(lines):
                 bl = lines[j]
+                # Track brace depth to find the matching '} while'
+                for ch in bl:
+                    if ch == '{':
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
                 wm = close_while_re.match(bl)
-                if wm:
+                if wm and depth == 0:
                     while_cond = wm.group(1).strip()
                     j += 1
                     break
@@ -522,6 +533,9 @@ def _rewrite_do_while(code: str) -> str:
 
             if while_cond is not None:
                 body_indent = indent + '    '
+                # Recursively convert any nested do/while in the body
+                body_text = _rewrite_do_while('\n'.join(body_lines))
+                body_lines = body_text.split('\n')
                 output.append(f'{indent}while True {{')
                 output.extend(body_lines)
                 # Use brace-style if so _braces_to_indent handles depth correctly
@@ -781,6 +795,92 @@ def _rewrite_increment_decrement(code: str) -> str:
     return code
 
 
+def _rewrite_ternary_expr(expr: str) -> str:
+    """Convert a PHP ternary expression (not a full line) to Python."""
+    expr = expr.strip()
+
+    # Strip enclosing parens and recurse
+    if expr.startswith('(') and expr.endswith(')'):
+        # Verify the parens are balanced (outermost)
+        depth = 0
+        for i, ch in enumerate(expr):
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            if depth == 0 and i < len(expr) - 1:
+                # Outermost ) is not the last char → parens are not fully wrapping
+                break
+        else:
+            inner = _rewrite_ternary_expr(expr[1:-1])
+            return '(' + inner + ')'
+
+    # Find '?' at depth 0 in this expression
+    depth = 0
+    in_str: str | None = None
+    q_pos = -1
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if in_str:
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+        elif ch in ('"', "'"):
+            in_str = ch
+        elif ch in ('(', '['):
+            depth += 1
+        elif ch in (')', ']'):
+            depth -= 1
+        elif ch == '?' and depth == 0:
+            if i + 1 < len(expr) and expr[i + 1] == '?':
+                i += 2
+                continue
+            q_pos = i
+            break
+        i += 1
+
+    if q_pos < 0:
+        return expr
+
+    cond = expr[:q_pos].strip()
+    rest = expr[q_pos + 1:]
+
+    # Find ':' at depth 0
+    depth = 0
+    in_str = None
+    c_pos = -1
+    i = 0
+    while i < len(rest):
+        ch = rest[i]
+        if in_str:
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+        elif ch in ('"', "'"):
+            in_str = ch
+        elif ch in ('(', '[', '{'):
+            depth += 1
+        elif ch in (')', ']', '}'):
+            depth -= 1
+        elif ch == ':' and depth == 0:
+            c_pos = i
+            break
+        i += 1
+
+    if c_pos < 0:
+        return expr
+
+    true_val = _rewrite_ternary_expr(rest[:c_pos].strip())
+    false_val = _rewrite_ternary_expr(rest[c_pos + 1:].strip())
+
+    return f'({true_val} if {cond} else {false_val})'
+
+
 def _rewrite_ternary(code: str) -> str:
     """Convert PHP ternary operator to Python conditional expression.
 
@@ -864,14 +964,16 @@ def _rewrite_ternary_line(line: str) -> str:
     if c_pos < 0:
         return line
 
-    true_val = rest_after_q[:c_pos].strip()
-    false_val = rest_after_q[c_pos + 1:].strip()
-
-    # Strip trailing semicolons (moved outside the ternary parens)
+    raw_false = rest_after_q[c_pos + 1:].strip()
+    # Strip trailing semicolon *before* recursive conversion so _rewrite_ternary_expr
+    # can recognise the enclosing parens and process nested ternaries.
     trailing = ''
-    if false_val.endswith(';'):
-        false_val = false_val[:-1].rstrip()
+    if raw_false.endswith(';'):
+        raw_false = raw_false[:-1].rstrip()
         trailing = ';'
+
+    true_val = _rewrite_ternary_expr(rest_after_q[:c_pos].strip())
+    false_val = _rewrite_ternary_expr(raw_false)
 
     # Determine where the condition starts (after assignment operator).
     # The regex (?<![=!<>])=(?!=) matches a bare `=` while excluding compound
@@ -1756,8 +1858,14 @@ def php_to_python(code: str) -> str:
     code = _split_inline_blocks(code)
     # 3. new ClassName( -> ClassName(
     code = _re_new.sub(r'\1(', code)
-    # 4. PHP concatenation assignment .= -> +=  (before the bare-dot step)
-    code = _sub_outside_strings(_re_concat_assign, '+=', code)
+    # 4. PHP concatenation assignment: expand $a .= $b to $a = $a . $b
+    #    so _apply_php_concat can coerce both sides to str (PHP semantics).
+    #    The simple substitution replaces '.= ' with '= var . ' in any position.
+    code = re.sub(
+        r'(\$\w+)\s*\.=\s*',
+        lambda m: f'{m.group(1)} = {m.group(1)} . ',
+        code,
+    )
     # 4a. Normalize echo(expr) -> echo expr so the concat step below can process it.
     #     In PHP, echo(expr) is echo applied to a parenthesised expression; the parens
     #     do not make it a function call.  We strip them here so _apply_php_concat sees

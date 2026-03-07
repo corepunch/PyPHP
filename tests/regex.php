@@ -59,5 +59,6 @@ assert($all[0][2] == "333");
 
 $special = preg_quote("hello.world+test", '/');
 $quoted_m = [];
-preg_match('/' . $special . '/', "prefix hello.world+test suffix", $quoted_m);
+$pattern = '/' . $special . '/';
+preg_match($pattern, "prefix hello.world+test suffix", $quoted_m);
 assert($quoted_m[0] == "hello.world+test");

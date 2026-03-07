@@ -660,7 +660,8 @@ def _make_php_builtins() -> dict:
         return math.sqrt(x)
 
     def _intdiv(a, b):
-        return int(a) // int(b)
+        """PHP intdiv: truncates toward zero (unlike Python // which floors)."""
+        return int(int(a) / int(b))
 
     def _fmod(x, y):
         return math.fmod(float(x), float(y))
@@ -810,24 +811,32 @@ def _make_php_builtins() -> dict:
 
     def _ksort(arr):
         if isinstance(arr, dict):
-            arr.update(dict(sorted(arr.items())))
+            sorted_items = sorted(arr.items())
+            arr.clear()
+            arr.update(sorted_items)
         return True
 
     def _krsort(arr):
         if isinstance(arr, dict):
-            arr.update(dict(sorted(arr.items(), reverse=True)))
+            sorted_items = sorted(arr.items(), reverse=True)
+            arr.clear()
+            arr.update(sorted_items)
         return True
 
     def _arsort(arr):
         if isinstance(arr, dict):
-            arr.update(dict(sorted(arr.items(), key=lambda x: x[1], reverse=True)))
+            sorted_items = sorted(arr.items(), key=lambda x: x[1], reverse=True)
+            arr.clear()
+            arr.update(sorted_items)
         elif isinstance(arr, list):
             arr.sort(reverse=True)
         return True
 
     def _asort(arr):
         if isinstance(arr, dict):
-            arr.update(dict(sorted(arr.items(), key=lambda x: x[1])))
+            sorted_items = sorted(arr.items(), key=lambda x: x[1])
+            arr.clear()
+            arr.update(sorted_items)
         elif isinstance(arr, list):
             arr.sort()
         return True

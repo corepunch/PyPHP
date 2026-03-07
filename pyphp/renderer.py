@@ -371,6 +371,11 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
 def render_file(path: str | Path, ctx: Context, developer: bool = False) -> str:
     path = Path(path)
     source = path.read_text(encoding='utf-8')
+    # Pure-PHP files commonly omit the closing "?>". The tokenizer requires a
+    # closing tag to recognise the block; append a synthetic one so those files
+    # are compiled correctly.  Mirror the same logic used in _require().
+    if '<?php' in source and not source.rstrip().endswith('?>'):
+        source = source.rstrip() + '\n?>'
     return render(source, ctx, filename=str(path), developer=developer)
 
 
