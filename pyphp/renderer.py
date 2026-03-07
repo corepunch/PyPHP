@@ -7,6 +7,7 @@ script, and executes it to produce the rendered output string.
 Also provides the E helper class for dot-access of XML element attributes.
 """
 
+import os as _os
 import re
 import sys as _sys
 from dataclasses import dataclass, field
@@ -304,6 +305,15 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
     # .php files are compiled through the PHP pipeline first; all other
     # extensions are executed as raw Python.
     def _require(path: str):
+        # PHP-like path resolution: if the path doesn't exist from the current
+        # working directory, try resolving it relative to the requiring file's
+        # directory (like PHP does for bare filenames with no directory separator).
+        # Skip when filename is '<template>' (the sentinel used for in-memory
+        # render() calls where no real file path is available).
+        if not _os.path.isabs(path) and not _os.path.exists(path) and filename != '<template>':
+            candidate = _os.path.join(_os.path.dirname(_os.path.abspath(filename)), path)
+            if _os.path.exists(candidate):
+                path = candidate
         before = set(scope)
         if path.endswith('.php'):
             with open(path, encoding='utf-8') as fh:
