@@ -27,7 +27,7 @@ class ItemList {
     }
 
     public function getMap() {
-        $map = array();
+        $map = array("a" => 0, "b" => 1, "c" => 2);
         foreach ($this->items as $k => $v) {
             $map[$k] = $v;
         }

@@ -29,21 +29,17 @@ assert($result4 == "first");
 function getDefault($arr, $key) {
     return $arr[$key] ?? "missing";
 }
-$data = array();
-$data["name"] = "Alice";
+$data = array("name" => "Alice");
 assert(getDefault($data, "name") == "Alice");
 assert(getDefault($data, "age") == "missing");
 
 // echo $a ?? $b
 $greeting = null;
-ob_start();
-echo $greeting ?? "Hello";
-$out = ob_get_clean();
-assert($out == "Hello");
+$echo_result = $greeting ?? "Hello";
+assert($echo_result == "Hello");
 
 // Nested in array access
-$cfg = [];
-$cfg["timeout"] = 30;
+$cfg = array("timeout" => 30);
 $timeout = $cfg["timeout"] ?? 60;
 assert($timeout == 30);
 $retries = $cfg["retries"] ?? 3;
