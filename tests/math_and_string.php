@@ -21,7 +21,7 @@ assert(abs(exp(0) - 1.0) < 0.001);
 assert(abs(exp(1) - M_E) < 0.001);
 
 // is_nan / is_infinite / is_finite
-assert(is_nan(sqrt(-1)) == false);   // PHP: false (no NaN from sqrt in this context)
+assert(is_nan(sqrt(-1)) == true);    // PHP: sqrt of negative returns NaN
 assert(is_finite(3.14) == true);
 assert(is_finite(INF) == false);
 assert(is_infinite(INF) == true);

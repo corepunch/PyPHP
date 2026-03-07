@@ -24,6 +24,8 @@ assert($answer == "yes");
 
 // ── Nested ternary (evaluated left-to-right) ────────────────────────────────
 
+// Tests C (70-89 range) — B (80-89) is intentionally omitted to keep
+// the example concise; describe() below covers A/B/C/F fully.
 $score = 75;
 $grade = $score >= 90 ? "A" : ($score >= 70 ? "C" : "F");
 assert($grade == "C");

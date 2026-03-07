@@ -873,8 +873,9 @@ def _rewrite_ternary_line(line: str) -> str:
         false_val = false_val[:-1].rstrip()
         trailing = ';'
 
-    # Determine where the condition starts (after assignment operator)
-    # Look for a non-comparison assignment: = but not ==, !=, <=, >=, ===
+    # Determine where the condition starts (after assignment operator).
+    # The regex (?<![=!<>])=(?!=) matches a bare `=` while excluding compound
+    # operators `==`, `!=`, `<=`, `>=` and the PHP strict-equality `===`.
     assign_m = re.search(r'(?<![=!<>])=(?!=)', prefix)
     if assign_m:
         assignment_part = prefix[:assign_m.end()]

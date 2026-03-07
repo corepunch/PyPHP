@@ -64,12 +64,15 @@ assert($r == [0, 5, 10, 15, 20]);
 
 // ── compact ──────────────────────────────────────────────────────────────────
 
-// compact() works when variables are defined in scope before calling
-// Since compact uses frame inspection, test with explicit dict creation
+// compact() works when variables are defined in scope before calling.
+// In PHP templates it's most practical to use it at the top level where
+// PHP $vars map to Python __vars in the exec scope.
+// We verify its behavior via direct dict construction (cross-compatible approach):
 $first = "John";
 $last = "Doe";
 $age = 30;
-$person = ['first' => $first, 'last' => $last, 'age' => $age];
+$person = compact('first', 'last', 'age');
 assert($person['first'] == 'John');
 assert($person['last'] == 'Doe');
 assert($person['age'] == 30);
+assert(count($person) == 3);

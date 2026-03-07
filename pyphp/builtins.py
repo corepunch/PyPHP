@@ -652,6 +652,13 @@ def _make_php_builtins() -> dict:
         return escaped
 
     # ── math (extended) ───────────────────────────────────────────────────────
+    def _sqrt(x):
+        """PHP sqrt: returns NaN for negative inputs (unlike Python which raises)."""
+        x = float(x)
+        if x < 0:
+            return float('nan')
+        return math.sqrt(x)
+
     def _intdiv(a, b):
         return int(a) // int(b)
 
@@ -696,15 +703,29 @@ def _make_php_builtins() -> dict:
 
     # ── array functions (extended) ────────────────────────────────────────────
     def _array_column(arr, col, idx_col=None):
+        """PHP array_column: extract a column from a multi-dimensional array."""
         arr = _to_array(arr)
-        items = arr.values() if isinstance(arr, dict) else arr
-        if col is None:
-            result = list(items)
+        rows = list(arr.values()) if isinstance(arr, dict) else list(arr)
+        if not rows:
+            return {} if idx_col is not None else []
+        # Determine if rows are dicts or objects
+        first = rows[0]
+        if isinstance(first, dict):
+            if col is None:
+                result = rows[:]
+            else:
+                result = [row[col] for row in rows if col in row]
+            if idx_col is not None:
+                return {row[idx_col]: row.get(col) for row in rows if idx_col in row}
         else:
-            result = [row[col] for row in items if col in row] if isinstance(next(iter(items), {}), dict) else [getattr(row, str(col), None) for row in items]
-        if idx_col is not None:
-            items2 = arr.values() if isinstance(arr, dict) else arr
-            return {row[idx_col]: row[col] for row in items2 if idx_col in row}
+            # Object attribute access
+            if col is None:
+                result = rows[:]
+            else:
+                result = [getattr(row, str(col), None) for row in rows]
+            if idx_col is not None:
+                return {getattr(row, str(idx_col), None): getattr(row, str(col), None)
+                        for row in rows}
         return result
 
     def _array_splice(arr, offset, length=None, replacement=None):
@@ -759,7 +780,11 @@ def _make_php_builtins() -> dict:
         return result
 
     def _php_range(start, end, step=1):
-        """PHP range(): generate array of values from start to end (inclusive)."""
+        """PHP range(): generate array of values from start to end (inclusive).
+
+        Uses a small epsilon (1e-9) at boundaries to handle floating-point
+        rounding, matching PHP's inclusive range semantics.
+        """
         step = abs(step)
         if isinstance(start, str) and isinstance(end, str) and len(start) == 1 and len(end) == 1:
             s, e = ord(start), ord(end)
@@ -1203,7 +1228,7 @@ def _make_php_builtins() -> dict:
         'floor':               math.floor,
         'round':               round,
         'pow':                 pow,
-        'sqrt':                math.sqrt,
+        'sqrt':                _sqrt,
         'max':                 max,
         'min':                 min,
         'rand':                random.randint,
