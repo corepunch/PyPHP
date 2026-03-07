@@ -43,6 +43,10 @@ class PHPError(Exception):
         """Return the error message in PHP CLI error format."""
         err_type = getattr(type(self.original), '_php_name', type(self.original).__name__)
         msg = str(self.original)
+        # Strip the Python-internal "_make_php_builtins.<locals>._fn" path so
+        # the plain function name is visible (GitHub's HTML renderer otherwise
+        # strips "<locals>" as an unknown HTML tag, hiding the function name).
+        msg = re.sub(r'_make_php_builtins\.<locals>\._?(\w+)', r'\1', msg)
         return (
             f'\nPHP Fatal error:  Uncaught {err_type}: {msg}'
             f' in {self.php_file} on line {self.php_line}\n'

@@ -6,6 +6,8 @@ built-in functions (string, array, math, type, serialisation, hashing) as
 Python callables, and the pre-built _PHP_BUILTINS singleton.
 """
 
+import functools
+import inspect
 import itertools
 import math
 import json
@@ -1188,7 +1190,35 @@ def _make_php_builtins() -> dict:
                 raise ValueError(f'Unknown hashing algorithm: {algo!r}')
         return digest if raw_output else digest.hex()
 
-    return {
+    def _compat(fn):
+        """Wrap a callable so extra positional args beyond its declared signature
+        are silently ignored.  PHP functions often accept optional args that our
+        Python implementations don't need; rather than crashing with a TypeError,
+        we drop the surplus args.  Variadic functions (those already accepting
+        *args) and non-callable values (constants, class objects) are returned
+        unchanged."""
+        if not callable(fn) or isinstance(fn, type):
+            return fn
+        try:
+            sig = inspect.signature(fn)
+        except (ValueError, TypeError):
+            return fn
+        params = list(sig.parameters.values())
+        if any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params):
+            return fn
+        max_pos = sum(
+            1 for p in params
+            if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                          inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        )
+
+        @functools.wraps(fn)
+        def _safe(*args, **kwargs):
+            return fn(*args[:max_pos], **kwargs)
+
+        return _safe
+
+    _builtins = {
         # string
         'strlen':              _strlen,
         'strtolower':          _strtolower,
@@ -1406,6 +1436,7 @@ def _make_php_builtins() -> dict:
         # internal: used by the PHP-concat translator (not called directly by templates)
         '_cat':                lambda *args: ''.join(str(a) for a in args),
     }
+    return {k: _compat(v) for k, v in _builtins.items()}
 
 
 _PHP_BUILTINS = _make_php_builtins()
