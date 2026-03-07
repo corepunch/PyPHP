@@ -353,6 +353,666 @@ def _convert_php_arrays(code: str) -> str:
     return ''.join(result)
 
 
+def _split_c_for_parts(inner: str) -> list:
+    """Split 'init; cond; update' at top-level semicolons (respects nested parens)."""
+    parts: list = []
+    current: list = []
+    depth = 0
+    for ch in inner:
+        if ch in ('(', '[', '{'):
+            depth += 1
+            current.append(ch)
+        elif ch in (')', ']', '}'):
+            depth -= 1
+            current.append(ch)
+        elif ch == ';' and depth == 0:
+            parts.append(''.join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        parts.append(''.join(current))
+    return parts
+
+
+def _c_for_inc_to_assign(s: str) -> str:
+    """Convert $x++ / ++$x / $x-- / --$x to plain assignment form."""
+    s = s.strip()
+    m = re.match(r'^(\$\w+)\+\+$|^\+\+(\$\w+)$', s)
+    if m:
+        v = m.group(1) or m.group(2)
+        return f'{v} = {v} + 1'
+    m = re.match(r'^(\$\w+)--$|^--(\$\w+)$', s)
+    if m:
+        v = m.group(1) or m.group(2)
+        return f'{v} = {v} - 1'
+    return s
+
+
+def _rewrite_c_for_loops(code: str) -> str:
+    """Convert C-style for ($init; $cond; $update) { } to while loops.
+
+    for ($i = 0; $i < 5; $i++) { body }
+    →
+    $i = 0;
+    while ($i < 5) {
+        body
+        $i = $i + 1;
+    }
+    """
+    lines = code.split('\n')
+    i = 0
+    output: list = []
+
+    c_for_re = re.compile(r'^([ \t]*)for\s*\((.+)\)\s*(\{?)\s*$')
+
+    while i < len(lines):
+        line = lines[i]
+        m = c_for_re.match(line)
+
+        if m:
+            indent = m.group(1)
+            inner = m.group(2)
+            has_brace = bool(m.group(3).strip())
+
+            parts = _split_c_for_parts(inner)
+
+            if len(parts) == 3:
+                init, cond, update = [p.strip() for p in parts]
+                update = _c_for_inc_to_assign(update)
+
+                if has_brace:
+                    # Collect body lines up to matching }
+                    body_lines: list = []
+                    j = i + 1
+                    depth = 1
+                    while j < len(lines) and depth > 0:
+                        bl = lines[j]
+                        # Simple brace counting (good enough for non-string code)
+                        for ch in bl:
+                            if ch == '{':
+                                depth += 1
+                            elif ch == '}':
+                                depth -= 1
+                        if depth > 0:
+                            body_lines.append(bl)
+                        j += 1
+
+                    # Recursively convert any nested for loops in the body
+                    body_text = _rewrite_c_for_loops('\n'.join(body_lines))
+                    body_lines = body_text.split('\n')
+
+                    body_indent = indent + '    '
+                    output.append(f'{indent}{init};')
+                    output.append(f'{indent}while ({cond}) {{')
+                    output.extend(body_lines)
+                    output.append(f'{body_indent}{update};')
+                    output.append(f'{indent}}}')
+                    i = j
+                    continue
+                else:
+                    # Colon/no-brace style: emit init, while header, rest unchanged
+                    output.append(f'{indent}{init};')
+                    output.append(f'{indent}while ({cond}):')
+                    i += 1
+                    # Collect body until endfor
+                    while i < len(lines):
+                        bl = lines[i].rstrip()
+                        if re.match(r'^\s*endfor\s*;?\s*$', bl):
+                            i += 1
+                            break
+                        output.append(lines[i])
+                        i += 1
+                    body_indent = indent + '    '
+                    output.append(f'{body_indent}{update}')
+                    continue
+
+        output.append(line)
+        i += 1
+
+    return '\n'.join(output)
+
+
+def _rewrite_do_while(code: str) -> str:
+    """Convert do { } while (cond); to while True: ...; if not cond: break.
+
+    PHP:
+        do {
+            body;
+        } while ($cond);
+
+    Python:
+        while True {
+            body;
+            if not ($cond):
+                break;
+        }
+    """
+    lines = code.split('\n')
+    i = 0
+    output: list = []
+
+    do_re = re.compile(r'^([ \t]*)do\s*(\{?)[ \t]*$')
+    close_while_re = re.compile(r'^[ \t]*\}\s*while\s*\((.+)\)\s*;?\s*$')
+
+    while i < len(lines):
+        line = lines[i]
+        m = do_re.match(line.rstrip())
+
+        if m:
+            indent = m.group(1)
+            has_brace = bool(m.group(2).strip())
+
+            body_lines: list = []
+            j = i + 1
+
+            if not has_brace:
+                # Look for opening { on next lines
+                while j < len(lines) and '{' not in lines[j]:
+                    j += 1
+                j += 1  # skip the { line
+
+            # Collect until '} while (cond);' at the same brace depth
+            while_cond = None
+            depth = 1
+            while j < len(lines):
+                bl = lines[j]
+                # Track brace depth to find the matching '} while'
+                for ch in bl:
+                    if ch == '{':
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                wm = close_while_re.match(bl)
+                if wm and depth == 0:
+                    while_cond = wm.group(1).strip()
+                    j += 1
+                    break
+                body_lines.append(bl)
+                j += 1
+
+            if while_cond is not None:
+                body_indent = indent + '    '
+                # Recursively convert any nested do/while in the body
+                body_text = _rewrite_do_while('\n'.join(body_lines))
+                body_lines = body_text.split('\n')
+                output.append(f'{indent}while True {{')
+                output.extend(body_lines)
+                # Use brace-style if so _braces_to_indent handles depth correctly
+                output.append(f'{body_indent}if not ({while_cond}) {{')
+                output.append(f'{body_indent}    break;')
+                output.append(f'{body_indent}}}')
+                output.append(f'{indent}}}')
+                i = j
+                continue
+
+        output.append(line)
+        i += 1
+
+    return '\n'.join(output)
+
+
+def _rewrite_switch(code: str) -> str:
+    """Convert switch/case blocks to if/elif/else chains.
+
+    PHP:
+        switch ($x) {
+            case 1:
+                echo "one";
+                break;
+            case 2:
+            case 3:
+                echo "two or three";
+                break;
+            default:
+                echo "other";
+        }
+
+    Python:
+        __sw = $x
+        if __sw == 1:
+            echo "one"
+        elif __sw == 2 or __sw == 3:
+            echo "two or three"
+        else:
+            echo "other"
+    """
+    lines = code.split('\n')
+    i = 0
+    output: list = []
+    _sw_counter = [0]
+
+    switch_re = re.compile(r'^([ \t]*)switch\s*\((.+)\)\s*(\{?)[ \t]*$')
+    case_re = re.compile(r'^[ \t]*case\s+(.+?)\s*:[ \t]*$')
+    default_re = re.compile(r'^[ \t]*default\s*:[ \t]*$')
+
+    while i < len(lines):
+        line = lines[i]
+        m = switch_re.match(line.rstrip())
+
+        if m:
+            indent = m.group(1)
+            expr = m.group(2).strip()
+            has_brace = bool(m.group(3).strip())
+
+            _sw_counter[0] += 1
+            temp = f'__sw{_sw_counter[0]}'
+
+            j = i + 1
+            if not has_brace:
+                # Find opening {
+                while j < len(lines) and '{' not in lines[j]:
+                    j += 1
+                j += 1  # skip { line
+
+            # Parse cases
+            cases: list = []           # [(val_list, body_lines)]
+            current_vals: list = []
+            current_body: list = []
+            depth = 1
+
+            while j < len(lines) and depth > 0:
+                bl = lines[j]
+                stripped = bl.strip()
+
+                # Track brace depth (simple, outside strings)
+                for ch in bl:
+                    if ch == '{':
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+
+                if depth <= 0:
+                    # End of switch block
+                    if current_vals:
+                        cases.append((current_vals[:], current_body[:]))
+                    break
+
+                mc = case_re.match(bl)
+                md = default_re.match(bl)
+
+                if mc:
+                    val = mc.group(1).strip()
+                    if current_vals and not current_body:
+                        # Fall-through: accumulate values
+                        current_vals.append(val)
+                    else:
+                        if current_vals:
+                            cases.append((current_vals[:], current_body[:]))
+                        current_vals = [val]
+                        current_body = []
+                elif md:
+                    if current_vals and not current_body:
+                        # Fall-through to default
+                        current_vals.append('__default__')
+                    else:
+                        if current_vals:
+                            cases.append((current_vals[:], current_body[:]))
+                        current_vals = ['__default__']
+                        current_body = []
+                elif stripped in ('break;', 'break'):
+                    pass  # skip break; handled by if/elif structure
+                elif current_vals:
+                    current_body.append(bl)
+
+                j += 1
+
+            # Emit switch as if/elif/else
+            output.append(f'{indent}{temp} = {expr}')
+            first = True
+            for vals, body in cases:
+                if '__default__' in vals:
+                    output.append(f'{indent}else:')
+                else:
+                    cond_parts = [f'{temp} == {v}' for v in vals]
+                    cond = ' or '.join(cond_parts)
+                    kw = 'if' if first else 'elif'
+                    output.append(f'{indent}{kw} {cond}:')
+                    first = False
+
+                if body:
+                    for bl in body:
+                        output.append(bl)
+                else:
+                    output.append(f'{indent}    pass')
+
+            i = j + 1
+            continue
+
+        output.append(line)
+        i += 1
+
+    return '\n'.join(output)
+
+
+def _split_single_line_if(code: str) -> str:
+    """Split single-line PHP if/while/elseif without braces into block form.
+
+    if ($x > 0) echo $x;        →  if ($x > 0) {\n    echo $x;\n}
+    while ($x > 0) $x--;        →  while ($x > 0) {\n    $x--;\n}
+    if ($x > 0) { ... }         →  unchanged (already has braces)
+    """
+    lines = code.split('\n')
+    result: list = []
+    pat = re.compile(
+        r'^([ \t]*)(if|elseif|while)\s*\((.+)\)\s+([^{:].*)$'
+    )
+    for line in lines:
+        m = pat.match(line)
+        if m:
+            # Verify that the captured condition has balanced parentheses.
+            # The regex is greedy and may match an inner ')' rather than the
+            # outer one closing the 'if (...)', which would give an unbalanced
+            # condition like 'isset($x["h"]'.  Skip such false matches.
+            cond_candidate = m.group(3)
+            depth = 0
+            balanced = True
+            for ch in cond_candidate:
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth < 0:
+                        balanced = False
+                        break
+            if not balanced or depth != 0:
+                result.append(line)
+                continue
+            indent = m.group(1)
+            kw = m.group(2)
+            cond = cond_candidate
+            body = m.group(4).rstrip(';').strip()
+            result.append(f'{indent}{kw} ({cond}) {{')
+            result.append(f'{indent}    {body};')
+            result.append(f'{indent}}}')
+        else:
+            result.append(line)
+    return '\n'.join(result)
+
+
+def _rewrite_catch(code: str) -> str:
+    """Convert PHP catch clauses to Python except clauses.
+
+    PHP:  } catch (ExceptionType $e) {
+    Python: } except ExceptionType as $e {
+
+    Also handles:  } catch (ExceptionType $e):
+    And:           throw new ExceptionType(...)  ->  raise ExceptionType(...)
+    And:           throw $e                      ->  raise $e
+    """
+    # } catch (Type $var) { or } catch (Type $var):
+    code = re.sub(
+        r'\}\s*catch\s*\(\s*(\w+)\s+\$(\w+)\s*\)\s*(\{|:)',
+        lambda m: '} except ' + m.group(1) + ' as $' + m.group(2) + ' ' + m.group(3),
+        code,
+    )
+    # catch without leading } (e.g. on own line after })
+    code = re.sub(
+        r'\bcatch\s*\(\s*(\w+)\s+\$(\w+)\s*\)\s*(\{|:)',
+        lambda m: 'except ' + m.group(1) + ' as $' + m.group(2) + ' ' + m.group(3),
+        code,
+    )
+    # throw new ExceptionType(...) -> raise ExceptionType(...)
+    # 'new' is removed by step 3, so: throw ExceptionType(...)
+    # But we need to handle both: process throw before step 3 removes 'new'
+    code = re.sub(r'\bthrow\s+new\b', 'raise', code)
+    code = re.sub(r'\bthrow\b', 'raise', code)
+    return code
+
+
+def _rewrite_define_const(code: str) -> str:
+    """Convert PHP define() calls and const declarations to Python assignments.
+
+    define('NAME', value)  ->  NAME = value
+    define("NAME", value)  ->  NAME = value
+    const NAME = value;    ->  NAME = value;
+    """
+    # define('CONST', value) or define("CONST", value)
+    code = re.sub(
+        r"\bdefine\s*\(\s*['\"](\w+)['\"]\s*,\s*(.+?)\s*\)\s*;?",
+        r'\1 = \2',
+        code,
+    )
+    # const NAME = value;  (file-level or class-level constants)
+    code = re.sub(
+        r'(?m)^\s*const\s+([A-Z_][A-Z0-9_]*)\s*=',
+        r'\1 =',
+        code,
+    )
+    return code
+
+
+def _rewrite_array_push_shorthand(code: str) -> str:
+    """Convert $arr[] = val to __arr.append(val).
+
+    This runs after $var -> __var substitution, so we match __varname[].
+    """
+    return re.sub(
+        r'(?m)^(\s*)__(\w+)\[\]\s*=\s*(.+?)\s*;?\s*$',
+        r'\1__\2.append(\3)',
+        code,
+    )
+
+
+def _rewrite_increment_decrement(code: str) -> str:
+    """Convert standalone PHP increment/decrement operators to augmented assignment.
+
+    __x++  ->  __x += 1
+    ++__x  ->  __x += 1
+    __x--  ->  __x -= 1
+    --__x  ->  __x -= 1
+
+    Only replaces standalone occurrences (whole line or at line end before ;).
+    """
+    # Post-increment/decrement: __x++ or __x--;  at end of statement
+    code = re.sub(r'(?m)^(\s*)(__\w+)\+\+\s*;?\s*$', r'\1\2 += 1', code)
+    code = re.sub(r'(?m)^(\s*)(__\w+)--\s*;?\s*$', r'\1\2 -= 1', code)
+    # Pre-increment/decrement: ++__x or --__x as a standalone statement
+    code = re.sub(r'(?m)^(\s*)\+\+(__\w+)\s*;?\s*$', r'\1\2 += 1', code)
+    code = re.sub(r'(?m)^(\s*)--(__\w+)\s*;?\s*$', r'\1\2 -= 1', code)
+    return code
+
+
+def _rewrite_ternary_expr(expr: str) -> str:
+    """Convert a PHP ternary expression (not a full line) to Python."""
+    expr = expr.strip()
+
+    # Strip enclosing parens and recurse
+    if expr.startswith('(') and expr.endswith(')'):
+        # Verify the parens are balanced (outermost)
+        depth = 0
+        for i, ch in enumerate(expr):
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            if depth == 0 and i < len(expr) - 1:
+                # Outermost ) is not the last char → parens are not fully wrapping
+                break
+        else:
+            inner = _rewrite_ternary_expr(expr[1:-1])
+            return '(' + inner + ')'
+
+    # Find '?' at depth 0 in this expression
+    depth = 0
+    in_str: str | None = None
+    q_pos = -1
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if in_str:
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+        elif ch in ('"', "'"):
+            in_str = ch
+        elif ch in ('(', '['):
+            depth += 1
+        elif ch in (')', ']'):
+            depth -= 1
+        elif ch == '?' and depth == 0:
+            if i + 1 < len(expr) and expr[i + 1] == '?':
+                i += 2
+                continue
+            q_pos = i
+            break
+        i += 1
+
+    if q_pos < 0:
+        return expr
+
+    cond = expr[:q_pos].strip()
+    rest = expr[q_pos + 1:]
+
+    # Find ':' at depth 0
+    depth = 0
+    in_str = None
+    c_pos = -1
+    i = 0
+    while i < len(rest):
+        ch = rest[i]
+        if in_str:
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+        elif ch in ('"', "'"):
+            in_str = ch
+        elif ch in ('(', '[', '{'):
+            depth += 1
+        elif ch in (')', ']', '}'):
+            depth -= 1
+        elif ch == ':' and depth == 0:
+            c_pos = i
+            break
+        i += 1
+
+    if c_pos < 0:
+        return expr
+
+    true_val = _rewrite_ternary_expr(rest[:c_pos].strip())
+    false_val = _rewrite_ternary_expr(rest[c_pos + 1:].strip())
+
+    return f'({true_val} if {cond} else {false_val})'
+
+
+def _rewrite_ternary(code: str) -> str:
+    """Convert PHP ternary operator to Python conditional expression.
+
+    expr ? true_val : false_val  ->  (true_val if expr else false_val)
+
+    Processes lines individually; skips comment lines.
+    Handles assignment context: __x = cond ? a : b  ->  __x = (a if cond else b)
+    """
+    lines = code.split('\n')
+    result = []
+    for line in lines:
+        result.append(_rewrite_ternary_line(line))
+    return '\n'.join(result)
+
+
+def _rewrite_ternary_line(line: str) -> str:
+    """Rewrite ternary operator in a single line."""
+    stripped = line.lstrip()
+    if stripped.startswith('#') or stripped.startswith('_out.write'):
+        return line
+
+    # Find '?' at paren/bracket depth 0, not preceded by another '?' (avoid ??)
+    depth = 0
+    in_str: str | None = None
+    q_pos = -1
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if in_str:
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+        elif ch in ('"', "'"):
+            in_str = ch
+        elif ch in ('(', '['):
+            depth += 1
+        elif ch in (')', ']'):
+            depth -= 1
+        elif ch == '?' and depth == 0:
+            # Avoid ?? (null coalesce) — already handled
+            if i + 1 < len(line) and line[i + 1] == '?':
+                i += 2
+                continue
+            # Avoid ?:  (Elvis operator — treat as ternary with same condition)
+            q_pos = i
+            break
+        i += 1
+
+    if q_pos < 0:
+        return line
+
+    prefix = line[:q_pos].rstrip()
+    rest_after_q = line[q_pos + 1:]
+
+    # Find ':' at depth 0 after the '?' (not inside string or nested expr)
+    depth = 0
+    in_str = None
+    c_pos = -1
+    i = 0
+    while i < len(rest_after_q):
+        ch = rest_after_q[i]
+        if in_str:
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+        elif ch in ('"', "'"):
+            in_str = ch
+        elif ch in ('(', '[', '{'):
+            depth += 1
+        elif ch in (')', ']', '}'):
+            depth -= 1
+        elif ch == ':' and depth == 0:
+            c_pos = i
+            break
+        i += 1
+
+    if c_pos < 0:
+        return line
+
+    raw_false = rest_after_q[c_pos + 1:].strip()
+    # Strip trailing semicolon *before* recursive conversion so _rewrite_ternary_expr
+    # can recognise the enclosing parens and process nested ternaries.
+    trailing = ''
+    if raw_false.endswith(';'):
+        raw_false = raw_false[:-1].rstrip()
+        trailing = ';'
+
+    true_val = _rewrite_ternary_expr(rest_after_q[:c_pos].strip())
+    false_val = _rewrite_ternary_expr(raw_false)
+
+    # Determine where the condition starts (after assignment operator).
+    # The regex (?<![=!<>])=(?!=) matches a bare `=` while excluding compound
+    # operators `==`, `!=`, `<=`, `>=` and the PHP strict-equality `===`.
+    assign_m = re.search(r'(?<![=!<>])=(?!=)', prefix)
+    if assign_m:
+        assignment_part = prefix[:assign_m.end()]
+        cond_expr = prefix[assign_m.end():].strip()
+    else:
+        # Check for 'return' / 'echo' prefix
+        kw_m = re.match(r'^(\s*(?:return|echo|print)\s+)(.*)', prefix)
+        if kw_m:
+            assignment_part = kw_m.group(1)
+            cond_expr = kw_m.group(2).strip()
+        else:
+            assignment_part = ''
+            cond_expr = prefix.strip()
+
+    return f'{assignment_part}({true_val} if {cond_expr} else {false_val}){trailing}'
+
+
 def _rewrite_isset(code: str) -> str:
     """Rewrite ``isset(expr1, expr2, ...)`` to ``_php_isset(lambda: expr1, lambda: expr2, ...)``.
 
@@ -1132,6 +1792,25 @@ def php_to_python(code: str) -> str:
     #    Must run first so $vars inside double-quoted strings are handled before
     #    the global $var->__var substitution (which skips string contents).
     code = _php_string_interpolation(code)
+    # 0b. define('CONST', val) / const NAME = val  ->  NAME = val
+    #     Must run before $var->__var so that constant names (no $) are unaffected.
+    code = _rewrite_define_const(code)
+    # 0c. do { } while (cond);  ->  while True { ... if not cond: break }
+    #     Must run before C-for and brace conversion.
+    code = _rewrite_do_while(code)
+    # 0d. Single-line if/while without braces: if (cond) stmt;  ->  if (cond) { stmt; }
+    #     Must run before C-for so for-loop bodies with single-line ifs are handled.
+    code = _split_single_line_if(code)
+    # 0e. C-style for ($init; $cond; $update) { }  ->  $init; while ($cond) { ... $update; }
+    #     Must run before $var->__var so $ signs are still present for increment detection.
+    code = _rewrite_c_for_loops(code)
+    # 0f. switch ($x) { case ...: ... }  ->  if/elif/else chain
+    #     Must run before $var->__var so case values retain PHP syntax.
+    code = _rewrite_switch(code)
+    # 0g. catch (Type $e) { }  ->  except Type as $e { }
+    #     throw new Foo(...)   ->  raise Foo(...)
+    #     Must run before $var->__var.
+    code = _rewrite_catch(code)
     # 0a. Class syntax preprocessing (must run before foreach/$var/function steps).
     #     i. Remove 'abstract' from class declarations: abstract class Foo -> class Foo
     code = re.sub(r'\babstract\s+(?=class\b)', '', code)
@@ -1197,8 +1876,14 @@ def php_to_python(code: str) -> str:
     code = _split_inline_blocks(code)
     # 3. new ClassName( -> ClassName(
     code = _re_new.sub(r'\1(', code)
-    # 4. PHP concatenation assignment .= -> +=  (before the bare-dot step)
-    code = _sub_outside_strings(_re_concat_assign, '+=', code)
+    # 4. PHP concatenation assignment: expand $a .= $b to $a = $a . $b
+    #    so _apply_php_concat can coerce both sides to str (PHP semantics).
+    #    The simple substitution replaces '.= ' with '= var . ' in any position.
+    code = re.sub(
+        r'(\$\w+)\s*\.=\s*',
+        lambda m: f'{m.group(1)} = {m.group(1)} . ',
+        code,
+    )
     # 4a. Normalize echo(expr) -> echo expr so the concat step below can process it.
     #     In PHP, echo(expr) is echo applied to a parenthesised expression; the parens
     #     do not make it a function call.  We strip them here so _apply_php_concat sees
@@ -1289,6 +1974,16 @@ def php_to_python(code: str) -> str:
         r'\1\2, \3',
         code,
     )
+    # 8i. Array push shorthand: __arr[] = val  ->  __arr.append(val)
+    #     Must run after $var -> __var (step 8).
+    code = _rewrite_array_push_shorthand(code)
+    # 8j. Standalone increment/decrement: __x++/--  ->  __x += 1 / -= 1
+    #     Must run after $var -> __var (step 8).
+    code = _rewrite_increment_decrement(code)
+    # 8k. PHP ternary operator: cond ? true : false  ->  (true if cond else false)
+    #     Must run after $var -> __var (step 8) and after null-coalesce (step 8e)
+    #     so ?? is already gone and we only see bare '?'.
+    code = _rewrite_ternary(code)
     # 9. echo -> _out.write(str(a), str(b), …)  — works in all positions (MULTILINE)
     #    Supports comma-separated echo arguments:
     #      echo "hello", "world"  ->  _out.write(str("hello"), str("world"))
