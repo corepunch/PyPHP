@@ -829,21 +829,50 @@ def _rewrite_array_push_shorthand(code: str) -> str:
 
 
 def _rewrite_increment_decrement(code: str) -> str:
-    """Convert standalone PHP increment/decrement operators to augmented assignment.
+    """Convert PHP increment/decrement operators to Python equivalents.
 
+    Standalone statements (whole line):
     __x++  ->  __x += 1
     ++__x  ->  __x += 1
     __x--  ->  __x -= 1
     --__x  ->  __x -= 1
 
-    Only replaces standalone occurrences (whole line or at line end before ;).
+    Expression context (inside function args, assignments, etc.):
+    __x++  ->  ((__x := __x + 1) - 1)   # post-increment: returns old value
+    __x--  ->  ((__x := __x - 1) + 1)   # post-decrement: returns old value
+    ++__x  ->  (__x := __x + 1)          # pre-increment: returns new value
+    --__x  ->  (__x := __x - 1)          # pre-decrement: returns new value
     """
-    # Post-increment/decrement: __x++ or __x--;  at end of statement
+    # Post-increment/decrement: __x++ or __x--;  at end of statement (standalone)
     code = re.sub(r'(?m)^(\s*)(__\w+)\+\+\s*;?\s*$', r'\1\2 += 1', code)
     code = re.sub(r'(?m)^(\s*)(__\w+)--\s*;?\s*$', r'\1\2 -= 1', code)
     # Pre-increment/decrement: ++__x or --__x as a standalone statement
     code = re.sub(r'(?m)^(\s*)\+\+(__\w+)\s*;?\s*$', r'\1\2 += 1', code)
     code = re.sub(r'(?m)^(\s*)--(__\w+)\s*;?\s*$', r'\1\2 -= 1', code)
+    # Expression-context post-increment: __x++ -> ((__x := __x + 1) - 1)
+    # Returns the old value while incrementing __x as a side-effect.
+    def _post_inc(m: re.Match) -> str:
+        v = m.group(1)
+        return f'(({v} := {v} + 1) - 1)'
+    code = re.sub(r'(__\w+)\+\+', _post_inc, code)
+    # Expression-context post-decrement: __x-- -> ((__x := __x - 1) + 1)
+    # Returns the old value while decrementing __x as a side-effect.
+    def _post_dec(m: re.Match) -> str:
+        v = m.group(1)
+        return f'(({v} := {v} - 1) + 1)'
+    code = re.sub(r'(__\w+)--', _post_dec, code)
+    # Expression-context pre-increment: ++__x -> (__x := __x + 1)
+    # Increments __x and returns the new value.
+    def _pre_inc(m: re.Match) -> str:
+        v = m.group(1)
+        return f'({v} := {v} + 1)'
+    code = re.sub(r'\+\+(__\w+)', _pre_inc, code)
+    # Expression-context pre-decrement: --__x -> (__x := __x - 1)
+    # Decrements __x and returns the new value.
+    def _pre_dec(m: re.Match) -> str:
+        v = m.group(1)
+        return f'({v} := {v} - 1)'
+    code = re.sub(r'--(__\w+)', _pre_dec, code)
     return code
 
 
