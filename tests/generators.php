@@ -105,4 +105,38 @@ function nums() {
 $combined = array_combine(letters(), nums());
 assert($combined["a"] == 1);
 assert($combined["c"] == 3);
+
+// ── Generator used in a nested foreach ────────────────────────────────────
+function range_gen($start, $end) {
+    $i = $start;
+    while ($i <= $end) {
+        yield $i;
+        $i += 1;
+    }
+}
+$matrix = [];
+foreach (range_gen(1, 2) as $row) {
+    foreach (range_gen(1, 3) as $col) {
+        array_push($matrix, $row * 10 + $col);
+    }
+}
+assert(implode(",", $matrix) == "11,12,13,21,22,23");
+
+// ── Empty generator edge case ─────────────────────────────────────────────
+function empty_gen() {
+    if (false) {
+        yield 0;
+    }
+}
+assert(count(array_values(empty_gen())) == 0);
+assert(array_sum(empty_gen()) == 0);
+
+// ── Generator passed to count() ────────────────────────────────────────────
+assert(count(array_values(squares(3))) == 3);
+
+// ── array_chunk with generator ─────────────────────────────────────────────
+$chunks = array_chunk(squares(6), 2);
+assert(count($chunks) == 3);
+assert(implode(",", $chunks[0]) == "1,4");
+assert(implode(",", $chunks[2]) == "25,36");
 ?>
