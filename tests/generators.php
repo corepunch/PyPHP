@@ -139,4 +139,24 @@ $chunks = array_chunk(squares(6), 2);
 assert(count($chunks) == 3);
 assert(implode(",", $chunks[0]) == "1,4");
 assert(implode(",", $chunks[2]) == "25,36");
+
+// ── is_iterable() and is_array() with generators ───────────────────────────
+assert(is_iterable(squares(2)));
+assert(!is_array(squares(2)));
+assert(is_iterable([]));
+assert(is_array([]));
+
+// ── array_key_exists() with key-value generator ────────────────────────────
+assert(array_key_exists("x", pairs()));
+assert(array_key_exists("z", pairs()));
+assert(!array_key_exists("w", pairs()));
+
+// ── rsort() on a generator materialised to a list ─────────────────────────
+$sorted = array_values(squares(4));
+rsort($sorted);
+assert(implode(",", $sorted) == "16,9,4,1");
+
+// ── Generator expression: array_map chained with array_filter ─────────────
+$result2 = array_filter(array_map(fn($v) => $v * 2, squares(5)), fn($v) => $v > 10);
+assert(implode(",", $result2) == "18,32,50");
 ?>
