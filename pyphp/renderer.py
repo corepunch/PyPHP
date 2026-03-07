@@ -41,7 +41,7 @@ class PHPError(Exception):
 
     def php_format(self) -> str:
         """Return the error message in PHP CLI error format."""
-        err_type = type(self.original).__name__
+        err_type = getattr(type(self.original), '_php_name', type(self.original).__name__)
         msg = str(self.original)
         return (
             f'\nPHP Fatal error:  Uncaught {err_type}: {msg}'

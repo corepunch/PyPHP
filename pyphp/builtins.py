@@ -17,8 +17,10 @@ import types as _types
 from .simplexml import simplexml_load_string, simplexml_load_file
 
 
-class _PHPException(BaseException):
+class _PHPException(Exception):
     """PHP-compatible Exception base class with getMessage(), getCode(), etc."""
+
+    _php_name = 'Exception'
 
     def __init__(self, message='', code=0, previous=None):
         super().__init__(str(message))
@@ -53,39 +55,39 @@ class _PHPException(BaseException):
 
 # PHP exception hierarchy
 class _PHPRuntimeException(_PHPException):
-    pass
+    _php_name = 'RuntimeException'
 
 
 class _PHPLogicException(_PHPException):
-    pass
+    _php_name = 'LogicException'
 
 
 class _PHPInvalidArgumentException(_PHPLogicException):
-    pass
+    _php_name = 'InvalidArgumentException'
 
 
 class _PHPOutOfRangeException(_PHPRuntimeException):
-    pass
+    _php_name = 'OutOfRangeException'
 
 
 class _PHPOutOfBoundsException(_PHPRuntimeException):
-    pass
+    _php_name = 'OutOfBoundsException'
 
 
 class _PHPTypeError(_PHPException):
-    pass
+    _php_name = 'TypeError'
 
 
 class _PHPValueError(_PHPException):
-    pass
+    _php_name = 'ValueError'
 
 
 class _PHPError(_PHPException):
-    pass
+    _php_name = 'Error'
 
 
 class _PHPParseError(_PHPError):
-    pass
+    _php_name = 'ParseError'
 
 
 def _make_php_builtins() -> dict:
