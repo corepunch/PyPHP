@@ -4,8 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyphp"
-version = "0.1.0"
+version = "0.0.0"  # overwritten at build time by the CI workflow
 description = "A lightweight PHP-style template renderer for Python"
+authors = [
+    { name = "Igor Chernakov", email = "igor.chernakov@gmail.com" },
+]
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
