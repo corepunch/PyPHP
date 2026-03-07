@@ -822,12 +822,19 @@ def _make_php_builtins() -> dict:
                     result[name] = caller_locals[name]
         return result
 
-    def _php_range(start, end, step=1):
+    def _php_range(start, end=None, step=1):
         """PHP range(): generate array of values from start to end (inclusive).
+
+        When called with a single argument (Python-style ``range(n)``), behaves
+        like Python: returns [0, 1, …, n-1].  With two or three arguments it
+        behaves like PHP (inclusive end).
 
         Uses a small epsilon (1e-9) at boundaries to handle floating-point
         rounding, matching PHP's inclusive range semantics.
         """
+        if end is None:
+            # Python-style single-argument range(n): 0 … n-1 (exclusive end)
+            return list(range(int(start)))
         step = abs(step)
         if isinstance(start, str) and isinstance(end, str) and len(start) == 1 and len(end) == 1:
             s, e = ord(start), ord(end)
