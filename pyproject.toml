@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61", "setuptools-scm>=8"]
+requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyphp"
-dynamic = ["version"]
+version = "0.0.0"  # overwritten at build time by the CI workflow
 description = "A lightweight PHP-style template renderer for Python"
 authors = [
     { name = "Igor Chernakov", email = "igor.chernakov@gmail.com" },
@@ -33,5 +33,3 @@ pyphp = "pyphp.__main__:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pyphp*"]
-
-[tool.setuptools_scm]
