@@ -310,8 +310,21 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
             if '<?php' in src and not src.rstrip().endswith('?>'):
                 src = src.rstrip() + '\n?>'
             req_tokens = tokenize(src)
-            script_src, _req_map = _tokens_to_python(req_tokens)
-            exec(compile(script_src, path, 'exec'), scope)
+            script_src, req_map = _tokens_to_python(req_tokens)
+            try:
+                exec(compile(script_src, path, 'exec'), scope)
+            except PHPError:
+                raise  # already carries correct file/line from a deeper require
+            except Exception as e:
+                # Walk the traceback to find the innermost frame from the required file.
+                py_lineno = None
+                tb = e.__traceback__
+                while tb is not None:
+                    if tb.tb_frame.f_code.co_filename == path:
+                        py_lineno = tb.tb_lineno
+                    tb = tb.tb_next
+                php_lineno = req_map.get(py_lineno, py_lineno) if py_lineno is not None else 1
+                raise PHPError(e, php_file=path, php_line=php_lineno, python_script=script_src) from e
         else:
             with open(path, encoding='utf-8') as fh:
                 exec(fh.read(), scope)
