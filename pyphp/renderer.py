@@ -120,9 +120,15 @@ class ExprToken:
     expr: str
     php_line: int = 1
 
+@dataclass
+class PyToken:
+    code: str
+    php_line: int = 1
+
 
 _TAG_PHP      = re.compile(r'<\?php\s*(.*?)\s*\?>', re.DOTALL)
 _TAG_EXPR     = re.compile(r'<\?=\s*(.*?)\s*\?>')
+_TAG_PY       = re.compile(r'<\?py\s*(.*?)\s*\?>', re.DOTALL)
 _HTML_COMMENT = re.compile(r'<!--.*?-->', re.DOTALL)
 
 
@@ -135,9 +141,10 @@ def tokenize(source: str) -> list:
     while pos < len(source):
         php_m  = _TAG_PHP.search(source, pos)
         expr_m = _TAG_EXPR.search(source, pos)
+        py_m   = _TAG_PY.search(source, pos)
 
         next_tag = None
-        for m in (php_m, expr_m):
+        for m in (php_m, expr_m, py_m):
             if m and (next_tag is None or m.start() < next_tag.start()):
                 next_tag = m
 
@@ -145,7 +152,7 @@ def tokenize(source: str) -> list:
             tokens.append(TextToken(source[pos:], php_line=line_at_pos))
             break
 
-        if next_tag is php_m:
+        if next_tag is php_m or next_tag is py_m:
             line_start = source.rfind('\n', 0, next_tag.start()) + 1
             before_tag = source[line_start:next_tag.start()]
             end = next_tag.end()
@@ -157,9 +164,13 @@ def tokenize(source: str) -> list:
                 if next_tag.start() > pos:
                     tokens.append(TextToken(source[pos:next_tag.start()], php_line=line_at_pos))
 
-            # Line number of code content starts at group(1), not the `<?php` tag itself.
+            # Line number of code content starts at group(1), not the tag itself.
             code_php_line = line_at_pos + source.count('\n', pos, next_tag.start(1))
-            tokens.append(CodeToken(php_to_python(next_tag.group(1)), php_line=code_php_line))
+            if next_tag is py_m:
+                # Raw Python: pass content through without PHP→Python conversion.
+                tokens.append(PyToken(next_tag.group(1), php_line=code_php_line))
+            else:
+                tokens.append(CodeToken(php_to_python(next_tag.group(1)), php_line=code_php_line))
             new_pos = end + 1 if end < len(source) and source[end] == '\n' else end
             line_at_pos += source.count('\n', pos, new_pos)
             pos = new_pos
@@ -221,7 +232,7 @@ def _tokens_to_python(tokens: list) -> tuple[str, dict]:
         else:
             if isinstance(token, ExprToken):
                 emit(f'_out.write(_eval({token.expr!r}))', php_line=token.php_line)
-            elif isinstance(token, CodeToken):
+            elif isinstance(token, (CodeToken, PyToken)):
                 code = token.code.strip()
                 php_base = token.php_line
                 if _BLOCK_CLOSE.match(code):

@@ -1279,6 +1279,16 @@ def php_to_python(code: str) -> str:
     # 8g. PHP arrow functions: fn($x) => expr -> lambda __x: expr
     #     Must run after step 8 ($var -> __var) so parameters carry the __ prefix.
     code = _convert_arrow_functions(code)
+    # 8h. PHP generator key-value yield: yield $k => $v -> yield __k, __v
+    #     Must run after step 8 ($var -> __var) and after 8g (arrow functions) so
+    #     only bare `yield expr => expr` statements remain.  The key uses a
+    #     non-greedy match and the value is greedy so it captures the rest of
+    #     the line (including any trailing semicolon, which Python tolerates).
+    code = re.sub(
+        r'(?m)^([ \t]*yield\s+)(.+?)\s*=>\s*(.+)',
+        r'\1\2, \3',
+        code,
+    )
     # 9. echo -> _out.write(str(a), str(b), …)  — works in all positions (MULTILINE)
     #    Supports comma-separated echo arguments:
     #      echo "hello", "world"  ->  _out.write(str("hello"), str("world"))
