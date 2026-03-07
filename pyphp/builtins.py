@@ -132,11 +132,20 @@ def _make_php_builtins() -> dict:
     def _lcfirst(s):                   s = str(s); return s[:1].lower() + s[1:]
     def _ucwords(s):                   return str(s).title()
     def _sprintf(fmt, *args):          return fmt % args
-    def _nl2br(s):                     return str(s).replace('\n', '<br />\n')
-    def _htmlspecialchars(s):
-        return (str(s).replace('&', '&amp;').replace('<', '&lt;')
-                       .replace('>', '&gt;').replace('"', '&quot;'))
-    def _htmlspecialchars_decode(s):
+    def _nl2br(s, is_xhtml=True):
+        tag = '<br />' if is_xhtml else '<br>'
+        return str(s).replace('\n', tag + '\n')
+    def _htmlspecialchars(s, flags=None, encoding=None, double_encode=True):
+        s = str(s)
+        if not double_encode:
+            # Temporarily protect existing entities before encoding ampersands
+            import re as _re
+            s = _re.sub(r'&(?=[a-zA-Z#]\w*;)', '\x00', s)
+            s = s.replace('&', '&amp;').replace('\x00', '&')
+        else:
+            s = s.replace('&', '&amp;')
+        return s.replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+    def _htmlspecialchars_decode(s, flags=None):
         return (str(s).replace('&amp;', '&').replace('&lt;', '<')
                        .replace('&gt;', '>').replace('&quot;', '"'))
     def _strip_tags(s):                return re.sub(r'<[^>]+>', '', str(s))
@@ -202,11 +211,20 @@ def _make_php_builtins() -> dict:
             return str(string).split(str(delimiter), limit - 1)
         return str(string).split(str(delimiter))
 
-    def _in_array(needle, haystack):        return needle in _to_array(haystack)
+    def _in_array(needle, haystack, strict=False):
+        haystack = _to_array(haystack)
+        if strict:
+            items = haystack.values() if isinstance(haystack, dict) else haystack
+            return any(v is needle or (type(v) is type(needle) and v == needle) for v in items)
+        return needle in haystack
     def _array_key_exists(key, arr):        return key in _to_array(arr)
-    def _array_keys(arr):
+    def _array_keys(arr, search_value=None, strict=False):
         arr = _to_array(arr)
-        return list(arr.keys()) if hasattr(arr, 'keys') else list(range(len(arr)))
+        if search_value is not None:
+            if isinstance(arr, dict):
+                return [k for k, v in arr.items() if (v is search_value or v == search_value)]
+            return [i for i, v in enumerate(arr) if (v is search_value or v == search_value)]
+        return list(arr.keys()) if isinstance(arr, dict) else list(range(len(arr)))
     def _array_values(arr):
         arr = _to_array(arr)
         return list(arr.values()) if hasattr(arr, 'values') else list(arr)
@@ -228,8 +246,16 @@ def _make_php_builtins() -> dict:
                     result[len(result)] = v
         return result
 
-    def _array_map(fn, arr):
+    def _array_map(fn, arr, *extra_arrays):
+        """PHP array_map: supports multiple arrays (when fn is not None) or zip (fn=None)."""
+        if extra_arrays:
+            arrays = [_to_array(a) for a in (arr,) + extra_arrays]
+            if fn is None:
+                return [list(group) for group in zip(*arrays)]
+            return [fn(*args) for args in zip(*arrays)]
         arr = _to_array(arr)
+        if fn is None:
+            return list(arr.values()) if isinstance(arr, dict) else list(arr)
         if isinstance(arr, dict):
             return list(map(fn, arr.values()))
         return list(map(fn, arr))
@@ -240,8 +266,13 @@ def _make_php_builtins() -> dict:
                 return {k: v for k, v in arr.items() if fn(v)}
             return {k: v for k, v in arr.items() if v}
         return list(filter(fn, arr)) if fn else [x for x in arr if x]
-    def _array_reverse(arr):             return list(reversed(_to_array(arr)))
-    def _array_unique(arr):              return list(dict.fromkeys(_to_array(arr)))
+    def _array_reverse(arr, preserve_keys=False):
+        arr = _to_array(arr)
+        if isinstance(arr, dict):
+            items = list(reversed(list(arr.items())))
+            return dict(items) if preserve_keys else [v for _, v in items]
+        return list(reversed(arr))
+    def _array_unique(arr, flags=None):    return list(dict.fromkeys(_to_array(arr)))
     def _array_push(arr, *vals):         arr.extend(vals); return len(arr)
     def _array_pop(arr):                 return arr.pop()
     def _array_shift(arr):               return arr.pop(0)
@@ -261,18 +292,21 @@ def _make_php_builtins() -> dict:
         if hasattr(arr, 'items'):
             return {v: k for k, v in arr.items()}
         return {v: k for k, v in enumerate(arr)}
-    def _array_search(needle, haystack):
+    def _array_search(needle, haystack, strict=False):
         haystack = _to_array(haystack)
         items = haystack.items() if hasattr(haystack, 'items') else enumerate(haystack)
         for k, v in items:
-            if v == needle:
+            if strict:
+                if type(v) is type(needle) and v == needle:
+                    return k
+            elif v == needle:
                 return k
         return False
     def _array_combine(keys, values):    return dict(zip(_to_array(keys), _to_array(values)))
     def _array_fill(start_index, num, value):
         return {start_index + i: value for i in range(num)}
-    def _sort(arr):                      arr.sort(); return True
-    def _rsort(arr):                     arr.sort(reverse=True); return True
+    def _sort(arr, flags=None):              arr.sort(); return True
+    def _rsort(arr, flags=None):             arr.sort(reverse=True); return True
     def _usort(arr, fn):                 arr.sort(key=fn); return True
 
     # ── math / type helpers ───────────────────────────────────────────────────
@@ -594,26 +628,27 @@ def _make_php_builtins() -> dict:
             py_flags |= re.VERBOSE
         return re.compile(core, py_flags), py_flags
 
-    def _preg_match(pattern, subject, matches=None, flags=0):
+    def _preg_match(pattern, subject, matches=None, flags=0, offset=0):
         """PHP preg_match: returns 1 on match, 0 otherwise; fills matches list."""
         pat, _ = _php_re(pattern)
-        m = pat.search(str(subject))
+        m = pat.search(str(subject), int(offset))
         if matches is not None and hasattr(matches, 'clear'):
             matches.clear()
             if m:
                 matches.extend([m.group(0)] + list(m.groups('')))
         return 1 if m else 0
 
-    def _preg_match_all(pattern, subject, matches=None, flags=0):
+    def _preg_match_all(pattern, subject, matches=None, flags=0, offset=0):
         """PHP preg_match_all: returns count of matches; fills matches list."""
         pat, _ = _php_re(pattern)
-        all_m = pat.findall(str(subject))
+        subject_str = str(subject)[int(offset):]
+        all_m = pat.findall(subject_str)
         count = len(all_m)
         if matches is not None and hasattr(matches, 'clear'):
             matches.clear()
             full = []
             group_lists: dict = {}
-            for m in pat.finditer(str(subject)):
+            for m in pat.finditer(subject_str):
                 full.append(m.group(0))
                 for idx, g in enumerate(m.groups(''), 1):
                     group_lists.setdefault(idx, []).append(g)
@@ -814,21 +849,21 @@ def _make_php_builtins() -> dict:
                 v -= step
             return result
 
-    def _ksort(arr):
+    def _ksort(arr, flags=None):
         if isinstance(arr, dict):
             sorted_items = sorted(arr.items())
             arr.clear()
             arr.update(sorted_items)
         return True
 
-    def _krsort(arr):
+    def _krsort(arr, flags=None):
         if isinstance(arr, dict):
             sorted_items = sorted(arr.items(), reverse=True)
             arr.clear()
             arr.update(sorted_items)
         return True
 
-    def _arsort(arr):
+    def _arsort(arr, flags=None):
         if isinstance(arr, dict):
             sorted_items = sorted(arr.items(), key=lambda x: x[1], reverse=True)
             arr.clear()
@@ -837,7 +872,7 @@ def _make_php_builtins() -> dict:
             arr.sort(reverse=True)
         return True
 
-    def _asort(arr):
+    def _asort(arr, flags=None):
         if isinstance(arr, dict):
             sorted_items = sorted(arr.items(), key=lambda x: x[1])
             arr.clear()
@@ -1308,8 +1343,8 @@ def _make_php_builtins() -> dict:
         'preg_split':          _preg_split,
         'preg_quote':          _preg_quote,
         # serialisation
-        'json_encode':         lambda x, flags=0: json.dumps(x),
-        'json_decode':         lambda x, assoc=False: json.loads(x),
+        'json_encode':         lambda x, flags=0, depth=512: json.dumps(x),
+        'json_decode':         lambda x, assoc=False, depth=512, flags=0: json.loads(x),
         'serialize':           lambda x: json.dumps(x),
         'unserialize':         lambda x: json.loads(x),
         # hashing / encoding
