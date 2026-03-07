@@ -862,6 +862,78 @@ def _rewrite_catch(code: str) -> str:
     return code
 
 
+# Keywords that may precede a $variable in non-type-hint positions.
+# These must not be stripped as if they were type annotations.
+_NON_TYPE_KEYWORDS = frozenset({
+    'as', 'new', 'instanceof', 'foreach', 'echo', 'print', 'return',
+    'and', 'or', 'not', 'if', 'else', 'while', 'for', 'in',
+    'except',    # from converted catch clauses
+    'public', 'private', 'protected', 'static', 'abstract', 'final',
+    'function', 'class', 'extends', 'implements', 'interface', 'trait',
+    'global', 'local', 'readonly',
+    'yield',     # generator yield statement
+    'list',      # list($a, $b) = ...
+    'break', 'continue', 'throw', 'raise',
+})
+
+
+def _strip_php_type_hints(code: str) -> str:
+    """Strip PHP 7+ type annotations from function signatures and typed properties.
+
+    Removes:
+    * Parameter type hints:  ``function f(int $x, string $y)``  →  ``function f($x, $y)``
+    * Nullable param types:  ``function f(?string $x)``          →  ``function f($x)``
+    * Union types:           ``function f(int|string $x)``       →  ``function f($x)``
+    * Return type hints:     ``function f(): string {``          →  ``function f() {``
+    * Typed properties:      ``private int $x;``                 →  ``private $x;``
+                             ``public int $x = 0;``              →  ``public $x = 0;``
+
+    The function runs *before* the ``$var`` → ``__var`` substitution and
+    *before* ``_expand_single_line_func_bodies`` so that both steps see clean
+    signatures.
+    """
+    # Strip return type annotations: ): type {  or  ): ?type {
+    # Handles simple types, nullable (?type), and union types (type1|type2).
+    code = re.sub(
+        r'\)\s*:\s*\??[\w]+(?:\s*\|\s*[\w]+)*\s*(?=\{)',
+        ') ',
+        code,
+    )
+    # Strip parameter type hints: [?]Type $var  →  $var
+    # Uses a replacement function to skip PHP keywords that aren't type hints.
+    def _maybe_strip_type(m: re.Match) -> str:
+        type_name = m.group(1).lstrip('?').split('|')[0]
+        if type_name.lower() in _NON_TYPE_KEYWORDS:
+            return m.group(0)   # not a type hint — keep as-is
+        return m.group(2)       # strip the type, keep the variable
+
+    code = re.sub(
+        r'(\??\b\w+(?:[ \t]*\|[ \t]*\w+)*)[ \t]+(\$[A-Za-z_]\w*)',
+        _maybe_strip_type,
+        code,
+    )
+    return code
+
+
+def _strip_anonymous_use(code: str) -> str:
+    """Strip ``use (...)`` capture clauses from PHP anonymous functions.
+
+    PHP:  ``function($x) use (&$walk, $data) {``
+    →     ``function($x) {``
+
+    Python closures naturally capture outer-scope variables by reference for
+    reading, so the ``use`` list is unnecessary for the common case.  The
+    ``&`` by-reference marker is also dropped — variables that need
+    ``nonlocal`` behaviour will typically work anyway since the closure is
+    only *called* after the outer variable is assigned.
+    """
+    return re.sub(
+        r'(function\s*\([^)]*\))\s+use\s*\([^)]*\)',
+        r'\1',
+        code,
+    )
+
+
 def _rewrite_dynamic_props(code: str) -> str:
     """Convert dynamic PHP property access ``self.$k`` to Python getattr/setattr.
 
@@ -918,11 +990,13 @@ def _rewrite_define_const(code: str) -> str:
 def _rewrite_array_push_shorthand(code: str) -> str:
     """Convert $arr[] = val to __arr.append(val).
 
-    This runs after $var -> __var substitution, so we match __varname[].
+    This runs after $var -> __var substitution and after -> is converted to .,
+    so we match both simple variables (__varname[]) and property chains
+    (self.prop[], __obj.prop[], self.a.b[]).
     """
     return re.sub(
-        r'(?m)^(\s*)__(\w+)\[\]\s*=\s*(.+?)\s*;?\s*$',
-        r'\1__\2.append(\3)',
+        r'(?m)^(\s*)((?:self|__\w+)(?:\.\w+)*)\[\]\s*=\s*(.+?)\s*;?\s*$',
+        r'\1\2.append(\3)',
         code,
     )
 
@@ -1394,7 +1468,14 @@ def _rewrite_null_coalesce(code: str) -> str:
         return segments
 
     def _rewrite_expr(expr: str) -> str:
-        """Rewrite a single expression that may contain top-level ``??``."""
+        """Rewrite a single expression that may contain top-level ``??``.
+
+        Statement-keyword prefixes (``return``, ``echo``, ``print``) are
+        extracted from the first segment *before* wrapping in a lambda so
+        that ``return $a ?? $b`` becomes ``return _php_coalesce(lambda: __a,
+        lambda: __b)`` rather than the illegal ``_php_coalesce(lambda: return
+        __a, lambda: __b)``.
+        """
         # Preserve any trailing semicolons so the overall statement structure survives.
         stripped = expr.rstrip()
         suffix = ''
@@ -1404,8 +1485,19 @@ def _rewrite_null_coalesce(code: str) -> str:
         segs = _split_on_null_coalesce(stripped)
         if len(segs) == 1:
             return expr
+        # Extract any statement keyword prefix from the first segment so the
+        # lambda body is a pure expression (lambda: return x is a syntax error).
+        prefix = ''
+        first = segs[0]
+        first_lstripped = first.lstrip()
+        for _kw in _STMT_KEYWORDS:
+            if first_lstripped.startswith(_kw):
+                # leading whitespace + keyword
+                prefix = first[:len(first) - len(first_lstripped)] + _kw
+                segs[0] = first_lstripped[len(_kw):]
+                break
         lambda_segs = ', '.join(f'lambda: {s}' for s in segs)
-        return f'_php_coalesce({lambda_segs}){suffix}'
+        return f'{prefix}_php_coalesce({lambda_segs}){suffix}'
 
     # Detect an assignment prefix: "lhs = " where = is not ==, !=, <=, >=, =>
     # We look for the first top-level bare = sign in *code*.
@@ -1413,7 +1505,9 @@ def _rewrite_null_coalesce(code: str) -> str:
     if assign_end is not None:
         lhs = code[:assign_end]
         rhs = code[assign_end:]
-        return lhs + _rewrite_expr(rhs)
+        rhs_lstripped = rhs.lstrip()
+        leading_space = rhs[:len(rhs) - len(rhs_lstripped)]
+        return lhs + leading_space + _rewrite_expr(rhs)
     return _rewrite_expr(code)
 
 
@@ -1828,6 +1922,49 @@ def _php_string_interpolation(code: str) -> str:
     return re.sub(r'"(?:[^"\\]|\\.)*"', _convert, code)
 
 
+def _split_call_args(code: str) -> list[str]:
+    """Split *code* on top-level commas, respecting strings and bracket nesting.
+
+    Used by ``_apply_php_concat`` to separate function-call arguments so that
+    each argument's concat chain can be converted independently.
+    """
+    args: list[str] = []
+    current: list[str] = []
+    depth = 0
+    in_str: str | None = None
+    i = 0
+    n = len(code)
+    while i < n:
+        c = code[i]
+        if in_str:
+            current.append(c)
+            if c == '\\':
+                i += 1
+                if i < n:
+                    current.append(code[i])
+            elif c == in_str:
+                in_str = None
+        elif c in ('"', "'"):
+            in_str = c
+            current.append(c)
+        elif c in ('(', '[', '{'):
+            depth += 1
+            current.append(c)
+        elif c in (')', ']', '}'):
+            depth -= 1
+            current.append(c)
+        elif c == ',' and depth == 0:
+            args.append(''.join(current))
+            current = []
+        else:
+            current.append(c)
+        i += 1
+    tail = ''.join(current)
+    if tail or args:
+        args.append(tail)
+    return args
+
+
 def _apply_php_concat(code: str) -> str:
     """Replace PHP string-concatenation chains ($a . "str" . $b) with _cat($a, "str", $b).
 
@@ -1836,7 +1973,74 @@ def _apply_php_concat(code: str) -> str:
     Must be called *before* -> is converted to . so no method-access dots exist yet.
     Statement boundaries (;) and newlines are respected so assignments are safe.
     echo EXPR . REST is preserved with echo as a keyword prefix, not a concat operand.
+
+    Two-pass algorithm
+    ------------------
+    **Pass 1** (pre-processing): scans for ``(...)`` blocks and recursively applies
+    this function to the comma-separated arguments inside each pair of parentheses.
+    This ensures that concat chains inside function call arguments — such as
+    ``strlen("a" . "b")`` → ``strlen(_cat("a", "b"))`` — are handled correctly
+    without breaking outer-level concat chains that contain function calls
+    (e.g. ``"prefix" . ucfirst($x) . "suffix"``).
+
+    **Pass 2** (outer level): processes depth-0 concat chains on the already-
+    pre-processed code.
     """
+    # ── Pass 1: recursively process concat inside function-call parentheses ───
+    n = len(code)
+    p1: list[str] = []
+    i = 0
+    while i < n:
+        ch = code[i]
+        # Skip string literals intact
+        if (ch == 'f' and i + 1 < n and code[i + 1] in '"\'') or ch in '"\'':
+            str_start = i
+            if ch == 'f':
+                i += 1
+            q = code[i]
+            i += 1
+            while i < n:
+                if code[i] == '\\':
+                    i += 2
+                    continue
+                if code[i] == q:
+                    i += 1
+                    break
+                i += 1
+            p1.append(code[str_start:i])
+            continue
+        if ch == '(':
+            # Find the matching ')' for this '('
+            j = i + 1
+            d = 1
+            s: str | None = None
+            while j < n and d > 0:
+                c = code[j]
+                if s:
+                    if c == '\\':
+                        j += 1
+                    elif c == s:
+                        s = None
+                elif c in ('"', "'"):
+                    s = c
+                elif c in ('(', '[', '{'):
+                    d += 1
+                elif c in (')', ']', '}'):
+                    d -= 1
+                j += 1
+            inner = code[i + 1: j - 1]
+            args = _split_call_args(inner)
+            processed = [_apply_php_concat(a) for a in args]
+            p1.append('(')
+            p1.append(','.join(processed))
+            p1.append(')')
+            i = j
+            continue
+        p1.append(ch)
+        i += 1
+    code = ''.join(p1)
+
+    # ── Pass 2: depth-0 concat chain conversion (original logic) ─────────────
     n = len(code)
     result:  list[str] = []
     chain:   list[str] = []   # operands in the current concat chain
@@ -1893,7 +2097,7 @@ def _apply_php_concat(code: str) -> str:
             current.append(code[str_start:i])
             continue
 
-        # ── parentheses ───────────────────────────────────────────────────────
+        # ── parentheses: track depth ────────────────────────────────────────
         if ch == '(':
             depth += 1
             current.append(ch)
@@ -1902,19 +2106,19 @@ def _apply_php_concat(code: str) -> str:
             depth -= 1
             current.append(ch)
 
-        # ── statement boundary: flush everything, keep ; ──────────────────────
+        # ── statement boundary: flush everything, keep ; ─────────────────────
         elif ch == ';' and depth == 0:
             flush_current()
             flush_chain()
             result.append(';')
 
-        # ── newline: also a statement boundary (concat never spans lines) ─────
+        # ── newline: also a statement boundary (concat never spans lines) ────
         elif ch == '\n' and depth == 0:
             flush_current()
             flush_chain()
             result.append('\n')
 
-        # ── plain assignment: flush LHS to result, continue fresh ─────────────
+        # ── plain assignment: flush LHS to result, continue fresh ────────────
         elif ch == '=' and depth == 0:
             prev_ch = code[i - 1] if i > 0 else ''
             next_ch = code[i + 1] if i + 1 < n else ''
@@ -1940,7 +2144,7 @@ def _apply_php_concat(code: str) -> str:
                 i = end
             continue
 
-        # ── potential concat dot ───────────────────────────────────────────────
+        # ── potential concat dot ─────────────────────────────────────────────
         elif ch == '.' and depth == 0:
             prev_ch = code[i - 1] if i > 0 else ''
             next_ch = code[i + 1] if i + 1 < n else ''
@@ -2042,9 +2246,14 @@ def _php_expr(expr: str) -> str:
     ``_apply_php_concat`` would misidentify as a PHP string-concatenation
     operator (e.g. ``foreach ($xml->book as $b)`` would become
     ``_cat(for __b in __xml, book:)`` instead of ``for __b in __xml.book:``).
+
+    ``$this`` is converted to ``self`` *before* the general ``$var`` →
+    ``__var`` pass so that ``foreach ($this->items as $x)`` produces
+    ``for __x in self.items:`` rather than ``for __x in __this.items:``.
     """
     expr = expr.strip()
     expr = _re_new.sub(r'\1(', expr)
+    expr = _re_this.sub('self', expr)   # $this → self before general $var → __var
     expr = _re_var.sub(r'__\1', expr)
     return expr
 
@@ -2078,10 +2287,27 @@ def php_to_python(code: str) -> str:
     #     throw new Foo(...)   ->  raise Foo(...)
     #     Must run before $var->__var.
     code = _rewrite_catch(code)
+    # 0h. Strip PHP anonymous function 'use' capture clauses.
+    #     function($x) use (&$walk, $data) {  ->  function($x) {
+    #     Must run before $var->__var so the clause still has $ prefixes.
+    code = _strip_anonymous_use(code)
+    # 0i. Strip PHP type hints from function signatures and typed property declarations.
+    #     function f(int $x): string {  ->  function f($x) {
+    #     private int $x;               ->  private $x;
+    #     Must run before _expand_single_line_func_bodies and $var->__var.
+    code = _strip_php_type_hints(code)
+    # 0j. Variadic parameters/spread: ...$argName -> *$argName
+    #     Must run before _apply_php_concat (step 4c) because _apply_php_concat treats
+    #     '.' as a PHP string-concatenation operator; three consecutive dots would be
+    #     consumed as three concat operators, silently removing the '...' prefix.
+    #     Also handles typed variadics after type-hint stripping (e.g. int ...$x -> ...$x).
+    code = re.sub(r'\.\.\.\$(\w+)', r'*$\1', code)
     # 0a. Class syntax preprocessing (must run before foreach/$var/function steps).
     #     i. Remove 'abstract' from class declarations: abstract class Foo -> class Foo
     code = re.sub(r'\babstract\s+(?=class\b)', '', code)
-    #     ii. Remove no-value property declarations: public $name; -> (removed)
+    #     ii. Remove no-value property declarations (with optional type annotation):
+    #         public $name;      ->  (removed)
+    #         private int $name; ->  (removed, type already stripped by step 0i)
     code = re.sub(
         r'^\s*(?:public|private|protected)\s+(?:static\s+)?\$\w+\s*;[ \t]*$',
         '',
@@ -2227,8 +2453,17 @@ def php_to_python(code: str) -> str:
         lambda m: f'def {m.group(1)}',
         code,
     )
-    # 8d. Rename PHP constructor to Python constructor
+    #     Anonymous functions assigned to a variable:
+    #       __fn = function(__params) {  ->  def __fn(__params) {
+    #     (runs after named-function rewrite so 'function' only matches anonymous forms)
+    code = re.sub(
+        r'(?m)^(\s*)(__\w+)\s*=\s*function\s*\(([^)]*)\)',
+        r'\1def \2(\3)',
+        code,
+    )
+    # 8d. Rename PHP magic methods to Python equivalents
     code = re.sub(r'\bdef\s+__construct\b', 'def __init__', code)
+    code = re.sub(r'\bdef\s+__toString\b', 'def __str__', code)
     # 8e. Null-coalescing operator: $a ?? $b  ->  _php_coalesce(lambda: __a, lambda: __b)
     #     Runs after step 8 ($var → __var) and after step 7 (// → #) so that lambdas
     #     capture __-prefixed names and PHP comment lines are already # comments.
