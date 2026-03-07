@@ -1,11 +1,14 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=61", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyphp"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A lightweight PHP-style template renderer for Python"
+authors = [
+    { name = "Igor Chernakov", email = "igor.chernakov@gmail.com" },
+]
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
@@ -30,3 +33,5 @@ pyphp = "pyphp.__main__:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pyphp*"]
+
+[tool.setuptools_scm]
