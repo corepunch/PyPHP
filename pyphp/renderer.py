@@ -43,6 +43,10 @@ class PHPError(Exception):
         """Return the error message in PHP CLI error format."""
         err_type = getattr(type(self.original), '_php_name', type(self.original).__name__)
         msg = str(self.original)
+        # Strip the Python-internal "_make_php_builtins.<locals>._fn" path so
+        # the plain function name is visible (GitHub's HTML renderer otherwise
+        # strips "<locals>" as an unknown HTML tag, hiding the function name).
+        msg = re.sub(r'_make_php_builtins\.<locals>\._?(\w+)', r'\1', msg)
         return (
             f'\nPHP Fatal error:  Uncaught {err_type}: {msg}'
             f' in {self.php_file} on line {self.php_line}\n'
@@ -310,8 +314,21 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
             if '<?php' in src and not src.rstrip().endswith('?>'):
                 src = src.rstrip() + '\n?>'
             req_tokens = tokenize(src)
-            script_src, _req_map = _tokens_to_python(req_tokens)
-            exec(compile(script_src, path, 'exec'), scope)
+            script_src, req_map = _tokens_to_python(req_tokens)
+            try:
+                exec(compile(script_src, path, 'exec'), scope)
+            except PHPError:
+                raise  # already carries correct file/line from a deeper require
+            except Exception as e:
+                # Walk the traceback to find the innermost frame from the required file.
+                py_lineno = None
+                tb = e.__traceback__
+                while tb is not None:
+                    if tb.tb_frame.f_code.co_filename == path:
+                        py_lineno = tb.tb_lineno
+                    tb = tb.tb_next
+                php_lineno = req_map.get(py_lineno, py_lineno) if py_lineno is not None else 1
+                raise PHPError(e, php_file=path, php_line=php_lineno, python_script=script_src) from e
         else:
             with open(path, encoding='utf-8') as fh:
                 exec(fh.read(), scope)

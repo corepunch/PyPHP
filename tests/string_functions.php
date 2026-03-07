@@ -4,6 +4,12 @@
 <?php assert(strtoupper($s) == "  HELLO WORLD  ") ?>
 <?php assert(trim($s) == "Hello World") ?>
 <?php assert(str_replace("World", "PHP", $s) == "  Hello PHP  ") ?>
+<?php
+// str_replace with optional 4th argument (count) must not raise TypeError
+$count = 0;
+$result = str_replace("l", "L", "hello world", $count);
+assert($result == "heLLo worLd");
+?>
 <?php $t = "abcdef"; ?>
 <?php assert(substr($t, 2, 3) == "cde") ?>
 <?php assert(strpos($t, "cd") == 2) ?>
