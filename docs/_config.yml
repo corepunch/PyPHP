@@ -1,0 +1,20 @@
+title: PyPHP
+description: >-
+  PHP-style template engine powered by Python — write PHP-like templates,
+  generate C headers, HTML reports, Markdown docs, and more.
+baseurl: "/PyPHP"
+url: "https://corepunch.github.io"
+
+theme: minima
+
+minima:
+  skin: classic
+
+header_pages:
+  - index.md
+  - examples.md
+  - usecases.md
+  - compatibility.md
+
+plugins:
+  - jekyll-feed
