@@ -101,7 +101,10 @@ def _make_php_builtins() -> dict:
     def _ltrim(s, chars=None):         return str(s).lstrip(chars) if chars else str(s).lstrip()
     def _rtrim(s, chars=None):         return str(s).rstrip(chars) if chars else str(s).rstrip()
 
-    def _str_replace(search, replace, subject):
+    def _str_replace(search, replace, subject, count=None):
+        # count is PHP's optional by-reference replacement-count argument;
+        # it is accepted here to avoid TypeError but is not updated (Python
+        # does not support pass-by-reference semantics for plain variables).
         if isinstance(search, list):
             replaces = replace if isinstance(replace, list) else [replace] * len(search)
             for s, r in zip(search, replaces):

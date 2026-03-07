@@ -42,17 +42,22 @@ _cast_py = {
     'int': 'int', 'integer': 'int', 'float': 'float', 'double': 'float',
     'string': 'str', 'bool': 'bool', 'boolean': 'bool', 'array': 'list',
 }
-# Matches: (int)$var | (int)(expr) | (int)42
+# Matches: (int)$var | (int)$var['key'] | (int)$var.prop | (int)(expr) | (int)42
+# The variable alternative matches $name optionally followed by any number of
+# subscript ([...]) or dotted-attribute (.attr) suffixes, so that the cast
+# wraps the *entire* expression rather than just the bare variable name.
+# For example: (string)$widget['name']  ->  str(__widget['name'])
+#              (string)$widget.name     ->  str(__widget.name)  (after -> became .)
 _re_cast = re.compile(
     r'\(\s*(int|integer|float|double|string|bool|boolean|array)\s*\)\s*'
-    r'(?:\$(\w+)|\(([^)]+)\)|(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?))',
+    r'(?:\$(\w+(?:\.\w+|\[(?:[^\[\]]*)\])*)|\(([^)]+)\)|(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?))',
     re.IGNORECASE,
 )
 
 
 def _cast_repl(m: re.Match) -> str:
     py_type = _cast_py[m.group(1).lower()]
-    if m.group(2):                      # (type)$var
+    if m.group(2):                      # (type)$var[...] or (type)$var.attr...
         return f'{py_type}(__{m.group(2)})'
     elif m.group(3) is not None:        # (type)(expr)
         return f'{py_type}(({m.group(3)}))'
@@ -128,6 +133,35 @@ def _sub_outside_strings(pattern, repl, code):
         pos = m.end()
     result.append(pattern.sub(repl, code[pos:]))
     return ''.join(result)
+
+
+def _sub_cast_outside_strings(pattern, repl, code):
+    """Apply a cast pattern to *code*, skipping matches that start inside string literals.
+
+    Unlike :func:`_sub_outside_strings`, this function applies the regex to
+    the *full* code string (rather than segment-by-segment), so the pattern can
+    match expressions that *span* a string literal — for example the subscript
+    in ``(string)$widget['name']`` where ``'name'`` is a PHP string literal.
+    Matches whose start position falls inside a string literal are left unchanged.
+    """
+    # Collect (start, end) ranges for every string literal in the code.
+    string_ranges: list[tuple[int, int]] = [
+        (sm.start(), sm.end()) for sm in _re_string.finditer(code)
+    ]
+
+    def _in_string(pos: int) -> bool:
+        """Return True if *pos* falls within any string-literal range."""
+        for start, end in string_ranges:
+            if start <= pos < end:
+                return True
+            if start > pos:
+                break  # ranges are in order; no need to check further
+        return False
+
+    def _guarded_repl(m: re.Match) -> str:
+        return m.group(0) if _in_string(m.start()) else repl(m)
+
+    return pattern.sub(_guarded_repl, code)
 
 
 def _split_top_level_commas(s: str) -> list[str]:
@@ -1915,7 +1949,9 @@ def php_to_python(code: str) -> str:
     code = _sub_outside_strings(_re_comment, r'#\1', code)
     # 7a. Type casting: (int)$x -> int(__x) etc.
     #     Must run with $vars still present (before step 8) so the regex can capture names.
-    code = _sub_outside_strings(_re_cast, _cast_repl, code)
+    #     Uses _sub_cast_outside_strings (not _sub_outside_strings) so the pattern can
+    #     match subscripts that contain string literals, e.g. (string)$widget['name'].
+    code = _sub_cast_outside_strings(_re_cast, _cast_repl, code)
     # 8. $var -> __var  outside strings (protects XPath ".//field[@name]")
     code = _sub_outside_strings(_re_var, r'__\1', code)
     # 8a. list($a,$b) = ... -> __a, __b = ...  (list() wrapper stripped after var subst)
