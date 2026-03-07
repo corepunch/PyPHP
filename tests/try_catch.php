@@ -79,3 +79,43 @@ try {
     $rte_msg = $e->getMessage();
 }
 assert($rte_msg == "runtime error");
+
+// ── TypeError ────────────────────────────────────────────────────────────────
+
+$te_msg = "";
+try {
+    throw new TypeError("type mismatch");
+} catch (TypeError $e) {
+    $te_msg = $e->getMessage();
+}
+assert($te_msg == "type mismatch");
+
+// ── TypeError caught by parent Exception ─────────────────────────────────────
+
+$te_parent = "";
+try {
+    throw new TypeError("parent catch");
+} catch (Exception $e) {
+    $te_parent = $e->getMessage();
+}
+assert($te_parent == "parent catch");
+
+// ── ValueError ───────────────────────────────────────────────────────────────
+
+$ve_msg = "";
+try {
+    throw new ValueError("bad value");
+} catch (ValueError $e) {
+    $ve_msg = $e->getMessage();
+}
+assert($ve_msg == "bad value");
+
+// ── Error ────────────────────────────────────────────────────────────────────
+
+$err_msg = "";
+try {
+    throw new Error("fatal error");
+} catch (Error $e) {
+    $err_msg = $e->getMessage();
+}
+assert($err_msg == "fatal error");
