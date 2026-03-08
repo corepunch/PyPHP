@@ -197,6 +197,58 @@ class PhpArray(list):
         return f"PhpArray({base})"
 
 
+def _call_var(fn):
+    """Resolve a PHP variable function call.
+
+    In PHP, ``$func($arg)`` calls the function named by the string value of
+    ``$func``.  After transpilation, this becomes ``_call_var(__func)($arg)``:
+    if ``fn`` is already callable (a Python function/lambda), it is returned
+    as-is; otherwise ``fn`` is treated as a function name and looked up in the
+    caller's exec-scope globals (which is the PHP script's namespace).
+
+    This module-level version uses frame inspection.  The renderer also
+    injects a scope-aware version (``_make_scope_call_var``) that is more
+    reliable across nested call depths.
+    """
+    if callable(fn):
+        return fn
+    if isinstance(fn, str):
+        import sys as _sys_
+        # Walk up the call stack looking for the exec scope (identified by '_out')
+        frame = _sys_._getframe(1)
+        while frame is not None:
+            g = frame.f_globals
+            if '_out' in g:
+                if fn in g and callable(g[fn]):
+                    return g[fn]
+                break
+            frame = frame.f_back
+        # Fall back to PHP builtins
+        if fn in _PHP_BUILTINS and callable(_PHP_BUILTINS[fn]):
+            return _PHP_BUILTINS[fn]
+        raise NameError(f"Call to undefined function '{fn}'")
+    raise TypeError(f"Value of type {type(fn).__name__} is not callable")
+
+
+def _make_scope_call_var(scope: dict):
+    """Return a ``_call_var`` variant that looks up functions directly in *scope*.
+
+    Used by the renderer to inject a scope-aware version that works reliably
+    regardless of the call depth (no frame inspection needed).
+    """
+    def _scoped_call_var(fn):
+        if callable(fn):
+            return fn
+        if isinstance(fn, str):
+            if fn in scope and callable(scope[fn]):
+                return scope[fn]
+            if fn in _PHP_BUILTINS and callable(_PHP_BUILTINS[fn]):
+                return _PHP_BUILTINS[fn]
+            raise NameError(f"Call to undefined function '{fn}'")
+        raise TypeError(f"Value of type {type(fn).__name__} is not callable")
+    return _scoped_call_var
+
+
 def _make_php_builtins() -> dict:
     """Build a dict of common PHP built-in functions mapped to Python equivalents."""
 
@@ -369,6 +421,8 @@ def _make_php_builtins() -> dict:
 
     def _array_map(fn, arr, *extra_arrays):
         """PHP array_map: supports multiple arrays (when fn is not None) or zip (fn=None)."""
+        if fn is not None and not callable(fn):
+            fn = _call_var(fn)
         if extra_arrays:
             arrays = [_to_array(a) for a in (arr,) + extra_arrays]
             if fn is None:
@@ -381,6 +435,8 @@ def _make_php_builtins() -> dict:
             return list(map(fn, arr.values()))
         return list(map(fn, arr))
     def _array_filter(arr, fn=None):
+        if fn is not None and not callable(fn):
+            fn = _call_var(fn)
         arr = _to_array(arr)
         if isinstance(arr, dict):
             if fn:
@@ -477,12 +533,14 @@ def _make_php_builtins() -> dict:
             arr.sort(reverse=True)
         return True
     def _usort(arr, fn):
+        if not callable(fn):
+            fn = _call_var(fn)
         if isinstance(arr, dict):
-            sorted_vals = sorted(dict.values(arr), key=fn)
+            sorted_vals = sorted(dict.values(arr), key=functools.cmp_to_key(fn))
             arr.clear()
             arr.update(enumerate(sorted_vals))
         else:
-            arr.sort(key=fn)
+            arr.sort(key=functools.cmp_to_key(fn))
         return True
 
     # ── math / type helpers ───────────────────────────────────────────────────
@@ -1065,13 +1123,17 @@ def _make_php_builtins() -> dict:
         return True
 
     def _uasort(arr, fn):
+        if not callable(fn):
+            fn = _call_var(fn)
         if isinstance(arr, dict):
-            arr.update(dict(sorted(arr.items(), key=lambda x: fn(x[1]))))
+            arr.update(dict(sorted(arr.items(), key=lambda x: functools.cmp_to_key(fn)(x[1]))))
         return True
 
     def _uksort(arr, fn):
+        if not callable(fn):
+            fn = _call_var(fn)
         if isinstance(arr, dict):
-            arr.update(dict(sorted(arr.items(), key=lambda x: fn(x[0]))))
+            arr.update(dict(sorted(arr.items(), key=lambda x: functools.cmp_to_key(fn)(x[0]))))
         return True
 
     # ── type / output helpers ─────────────────────────────────────────────────
@@ -1525,7 +1587,7 @@ def _make_php_builtins() -> dict:
         # type
         'intval':              _intval,
         'floatval':            _floatval,
-        'strval':              str,
+        'strval':              lambda v: '1' if v is True else ('' if v is False or v is None else str(v)),
         'boolval':             bool,
         'is_array':            lambda x: isinstance(x, (list, dict)),
         'is_iterable':         lambda x: isinstance(x, (list, dict, _types.GeneratorType)) or hasattr(x, '__iter__'),
@@ -1617,7 +1679,19 @@ def _make_php_builtins() -> dict:
         'FALSE':               False,
         'NULL':                None,
         # internal: used by the PHP-concat translator (not called directly by templates)
-        '_cat':                lambda *args: ''.join(str(a) for a in args),
+        # PHP string coercion rules: True->"1", False->"", None->"", others->str()
+        '_cat':                lambda *args: ''.join(
+            '1' if a is True else ('' if a is False or a is None else str(a))
+            for a in args
+        ),
+        # internal: PHP spaceship operator a <=> b  (-1, 0, or 1)
+        '_php_spaceship':      lambda a, b: 0 if a == b else (1 if a > b else -1),
+        # internal: PHP 8 null-safe operator obj?->member  (returns None if obj is None)
+        '_php_nullsafe':       lambda obj, fn: None if obj is None else fn(obj),
+        # PHP call_user_func / call_user_func_array
+        'call_user_func':      lambda fn, *args: _call_var(fn)(*args),
+        'call_user_func_array': lambda fn, args: _call_var(fn)(*args),
+        'is_callable':         callable,
     }
     return {k: _compat(v) for k, v in _builtins.items()}
 

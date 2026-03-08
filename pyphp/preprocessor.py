@@ -70,8 +70,9 @@ _re_concat_assign = re.compile(r'\.=')
 
 # PHP function declarations
 # Matches: function foo(__a, __b = None) { or function foo() {}
-_re_func_empty   = re.compile(r'\bfunction\s+(\w+)\s*\(([^)]*)\)\s*\{\s*\}')
-_re_func_keyword = re.compile(r'\bfunction\s+(\w+)\b')
+# Use [ \t]+ (not \s+) to prevent cross-line matches through comment-line endings.
+_re_func_empty   = re.compile(r'\bfunction[ \t]+(\w+)[ \t]*\(([^)]*)\)[ \t]*\{[ \t]*\}')
+_re_func_keyword = re.compile(r'\bfunction[ \t]+(\w+)\b')
 
 # Statement keywords that prefix an expression (extracted before concat processing)
 _STMT_KEYWORDS = ('echo ', 'return ', 'print ')
@@ -108,6 +109,8 @@ _re_strict_eq  = re.compile(r'===')
 # PHP logical AND/OR operators: && -> and,  || -> or  (outside strings)
 _re_logical_and = re.compile(r'&&')
 _re_logical_or  = re.compile(r'\|\|')
+# PHP spaceship operator: $a <=> $b  ->  _php_spaceship(__a, __b)
+_re_spaceship = re.compile(r'<=>')
 # Static property access: ClassName::$Prop -> ClassName::_s_Prop  (add _s_ prefix, strip $ before __var step)
 # Using _s_ prefix distinguishes static properties from class constants (ClassName::CONST),
 # so that config::TypeInfos (no $) correctly fails while config::$TypeInfos works.
@@ -643,6 +646,173 @@ def _rewrite_do_while(code: str) -> str:
     return '\n'.join(output)
 
 
+def _normalize_match(code: str) -> str:
+    """Collapse multi-line match() {...} expressions onto a single line.
+
+    PHP allows match expressions to span multiple lines:
+        $x = match($val) {
+            1 => "one",
+            default => "other"
+        };
+    This function joins the lines into one so the per-line rewriters can process it.
+    """
+    lines = code.split('\n')
+    output: list[str] = []
+    i = 0
+    match_re = re.compile(r'^([ \t]*)(.+\bmatch\s*\(.+)\{[ \t]*$')
+    while i < len(lines):
+        m = match_re.match(lines[i])
+        if m:
+            indent = m.group(1)
+            accumulated = [m.group(2).rstrip() + ' {']
+            j = i + 1
+            depth = 1
+            while j < len(lines) and depth > 0:
+                bl = lines[j].strip()
+                depth += bl.count('{') - bl.count('}')
+                if depth <= 0:
+                    # closing brace line (possibly "};" or just "}")
+                    closing = bl.lstrip('}').strip()  # e.g. ";" or ""
+                    accumulated.append('}')
+                    if closing:
+                        accumulated.append(closing)
+                else:
+                    accumulated.append(bl)
+                j += 1
+            output.append(indent + ' '.join(accumulated))
+            i = j
+        else:
+            output.append(lines[i])
+            i += 1
+    return '\n'.join(output)
+
+
+def _rewrite_match_expr(code: str) -> str:
+    """Convert PHP 8 ``match(EXPR) { ... }`` to a Python conditional expression.
+
+    match($x) { 1 => "one", 2, 3 => "two-or-three", default => "other" }
+    ->
+    (lambda _m_: ("one" if _m_ == 1 else (("two-or-three") if _m_ in (2,3) else "other")))(__x)
+
+    Must run after ``_normalize_match`` collapses multi-line blocks onto one line
+    and before array conversion (step 1a) so ``=>`` in arms is still present.
+    """
+    if 'match' not in code:
+        return code
+
+    match_re = re.compile(r'\bmatch\s*\((.+?)\)\s*\{(.+)\}')
+
+    def _convert_match(m: re.Match) -> str:
+        subject = m.group(1).strip()
+        body = m.group(2).strip()
+        # Parse arms: split on commas at top level, respecting nesting + strings
+        arms_raw = _split_match_arms(body)
+        # Build nested ternary
+        default_val: str | None = None
+        conditions: list[tuple[list[str], str]] = []
+        for arm in arms_raw:
+            arrow_pos = _find_top_level_arrow(arm)
+            if arrow_pos < 0:
+                continue
+            keys_raw = arm[:arrow_pos].strip()
+            value = arm[arrow_pos + 2:].strip().rstrip(',').strip()
+            if keys_raw == 'default':
+                default_val = value
+            else:
+                # Keys may be comma-separated: 1, 2
+                keys = [k.strip() for k in keys_raw.split(',') if k.strip()]
+                conditions.append((keys, value))
+        # If no default, raise MatchError (simulate PHP UnhandledMatchError)
+        fallback = default_val if default_val is not None else (
+            '(__import__("builtins").exec('
+            '"raise ValueError(\'Unhandled match case\')"))'
+        )
+        # Build from last condition backwards
+        expr = fallback
+        for keys, value in reversed(conditions):
+            if len(keys) == 1:
+                cond = f'_m_ == ({keys[0]})'
+            else:
+                cond = f'_m_ in ({", ".join(keys)})'
+            expr = f'({value}) if {cond} else ({expr})'
+        return f'(lambda _m_: {expr})({subject})'
+
+    return match_re.sub(_convert_match, code)
+
+
+def _split_match_arms(body: str) -> list[str]:
+    """Split match body on commas that are at top level (after '=>' value)."""
+    arms: list[str] = []
+    current: list[str] = []
+    depth = 0
+    in_str: str | None = None
+    after_arrow = False  # True once we've seen '=>' in current arm
+    i = 0
+    n = len(body)
+    while i < n:
+        c = body[i]
+        if in_str:
+            current.append(c)
+            if c == '\\':
+                i += 1
+                if i < n:
+                    current.append(body[i])
+            elif c == in_str:
+                in_str = None
+        elif c in ('"', "'"):
+            in_str = c
+            current.append(c)
+        elif c in ('(', '[', '{'):
+            depth += 1
+            current.append(c)
+        elif c in (')', ']', '}'):
+            depth -= 1
+            current.append(c)
+        elif c == '=' and i + 1 < n and body[i + 1] == '>' and depth == 0:
+            after_arrow = True
+            current.append(c)
+            current.append('>')
+            i += 2
+            continue
+        elif c == ',' and depth == 0 and after_arrow:
+            # End of this arm
+            arms.append(''.join(current))
+            current = []
+            after_arrow = False
+        else:
+            current.append(c)
+        i += 1
+    if current:
+        arms.append(''.join(current))
+    return [a.strip() for a in arms if a.strip()]
+
+
+def _find_top_level_arrow(s: str) -> int:
+    """Find the position of '=>' at depth 0 in s, or -1 if not found."""
+    depth = 0
+    in_str: str | None = None
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if in_str:
+            if c == '\\':
+                i += 2
+                continue
+            if c == in_str:
+                in_str = None
+        elif c in ('"', "'"):
+            in_str = c
+        elif c in ('(', '[', '{'):
+            depth += 1
+        elif c in (')', ']', '}'):
+            depth -= 1
+        elif c == '=' and i + 1 < n and s[i + 1] == '>' and depth == 0:
+            return i
+        i += 1
+    return -1
+
+
 def _rewrite_switch(code: str) -> str:
     """Convert switch/case blocks to if/elif/else chains.
 
@@ -899,6 +1069,93 @@ def _expand_single_line_func_bodies(code: str) -> str:
     return '\n'.join(result)
 
 
+def _rewrite_nullsafe(code: str) -> str:
+    r"""Convert PHP 8 null-safe operator ``$obj?->member`` to a lambda call.
+
+    ``$obj?->method($arg)``  ->  ``_php_nullsafe($obj, lambda _o: _o->method($arg))``
+    ``$obj?->prop``          ->  ``_php_nullsafe($obj, lambda _o: _o->prop)``
+
+    Must run *before* step 5 (``->`` → ``.``) so the ``->`` inside the lambda
+    body is later converted to ``.`` together with all other arrows.
+    Must also run *before* step 8 (``$var`` → ``__var``) for the same reason.
+    """
+    if '?->' not in code:
+        return code
+    lines = code.split('\n')
+    return '\n'.join(_nullsafe_line(ln) for ln in lines)
+
+
+def _nullsafe_line(line: str) -> str:
+    """Convert ``?->`` occurrences in a single source line."""
+    if '?->' not in line:
+        return line
+    n = len(line)
+    out: list[str] = []
+    i = 0
+    while i < n:
+        if line[i:i + 3] == '?->':
+            # ── extract object expression from out ────────────────────────
+            acc = ''.join(out)
+            s = acc.rstrip()
+            # Scan backwards to find the start of the object expression.
+            # Stop at statement boundaries (;, =, ,) at depth 0 or start.
+            obj_start = len(s) - 1
+            depth = 0
+            while obj_start >= 0:
+                c = s[obj_start]
+                if c in (')', ']'):
+                    depth += 1
+                elif c in ('(', '['):
+                    if depth > 0:
+                        depth -= 1
+                    else:
+                        obj_start += 1
+                        break
+                elif depth == 0:
+                    if c in (',', ';', '\n'):
+                        obj_start += 1
+                        break
+                    if c == '=' and obj_start > 0 and s[obj_start - 1] not in (
+                        '!', '<', '>', '='
+                    ):
+                        obj_start += 1
+                        break
+                obj_start -= 1
+            else:
+                obj_start = 0
+            obj = s[obj_start:].strip()
+            prefix = s[:obj_start]
+            # ── extract member access: scan forward from i+3 ──────────────
+            k = i + 3
+            depth2 = 0
+            while k < n:
+                c = line[k]
+                if c in ('(', '['):
+                    depth2 += 1
+                elif c in (')', ']'):
+                    if depth2 > 0:
+                        depth2 -= 1
+                    else:
+                        break
+                elif depth2 == 0:
+                    if c in (';', ','):
+                        break
+                    if c == '-' and k + 1 < n and line[k + 1] == '>':
+                        k += 2  # consume '->' as part of member chain
+                        continue
+                    if c in (' ', '=', '<', '>', '!', '+', '*', '/', '%',
+                             '&', '|', '^', '?', ':'):
+                        break
+                k += 1
+            member = line[i + 3: k]
+            out = [prefix, f'_php_nullsafe({obj}, lambda _o: _o->{member})']
+            i = k
+        else:
+            out.append(line[i])
+            i += 1
+    return ''.join(out)
+
+
 def _rewrite_catch(code: str) -> str:
     """Convert PHP catch clauses to Python except clauses.
 
@@ -968,14 +1225,15 @@ def _strip_php_type_hints(code: str) -> str:
     )
     # Strip parameter type hints: [?]Type $var  →  $var
     # Uses a replacement function to skip PHP keywords that aren't type hints.
+    # Uses _sub_outside_strings to avoid matching inside string literals.
     def _maybe_strip_type(m: re.Match) -> str:
         type_name = m.group(1).lstrip('?').split('|')[0]
         if type_name.lower() in _NON_TYPE_KEYWORDS:
             return m.group(0)   # not a type hint — keep as-is
         return m.group(2)       # strip the type, keep the variable
 
-    code = re.sub(
-        r'(\??\b\w+(?:[ \t]*\|[ \t]*\w+)*)[ \t]+(\$[A-Za-z_]\w*)',
+    code = _sub_outside_strings(
+        re.compile(r'(\??\b\w+(?:[ \t]*\|[ \t]*\w+)*)[ \t]+(\$[A-Za-z_]\w*)'),
         _maybe_strip_type,
         code,
     )
@@ -1205,6 +1463,90 @@ def _rewrite_ternary_expr(expr: str) -> str:
     false_val = _rewrite_ternary_expr(rest[c_pos + 1:].strip())
 
     return f'({true_val} if {cond} else {false_val})'
+
+
+def _rewrite_spaceship(code: str) -> str:
+    """Replace PHP spaceship operator ``a <=> b`` with ``_php_spaceship(a, b)``.
+
+    Runs after ``$var → __var`` (step 8) so variables carry the ``__`` prefix,
+    and after arrow-function conversion so ``=>`` no longer appears in the code.
+    Each line is processed independently; the operand boundaries used are:
+
+    * **Left boundary** (scanning backwards): ``(``, ``[``, ``,``, ``;``, ``:``,
+      plain ``=``, or the start of the string.
+    * **Right boundary** (scanning forwards): ``)``, ``]``, ``,``, ``;``, or the
+      end of the string.  Bracket depth is tracked so that ``func(a <=> b)``
+      extracts ``a`` on the left and ``b`` on the right correctly.
+    """
+    if '<=>' not in code:
+        return code
+    lines = code.split('\n')
+    return '\n'.join(_spaceship_line(ln) for ln in lines)
+
+
+def _spaceship_line(line: str) -> str:
+    """Convert all ``<=>`` occurrences in a single line."""
+    if '<=>' not in line:
+        return line
+    n = len(line)
+    out: list[str] = []
+    i = 0
+    while i < n:
+        if line[i:i + 3] == '<=>':
+            # ── extract left operand from out ──────────────────────────────
+            acc = ''.join(out)
+            s = acc.rstrip()
+            left_start = len(s) - 1
+            depth = 0
+            while left_start >= 0:
+                c = s[left_start]
+                if c in (')', ']'):
+                    depth += 1
+                elif c in ('(', '['):
+                    if depth > 0:
+                        depth -= 1
+                    else:
+                        left_start += 1
+                        break
+                elif depth == 0:
+                    if c in (',', ';', ':', ' '):
+                        left_start += 1
+                        break
+                    if c == '=' and left_start > 0 and s[left_start - 1] not in (
+                        '!', '<', '>', '='
+                    ):
+                        left_start += 1
+                        break
+                left_start -= 1
+            else:
+                left_start = 0
+            left = s[left_start:].strip()
+            prefix = s[:left_start]
+            # ── extract right operand from remaining line ───────────────────
+            j = i + 3
+            while j < n and line[j] == ' ':
+                j += 1
+            right_start = j
+            depth2 = 0
+            while j < n:
+                c = line[j]
+                if c in ('(', '['):
+                    depth2 += 1
+                elif c in (')', ']'):
+                    if depth2 > 0:
+                        depth2 -= 1
+                    else:
+                        break
+                elif depth2 == 0 and c in (',', ';'):
+                    break
+                j += 1
+            right = line[right_start:j].strip()
+            out = [prefix, f'_php_spaceship({left}, {right})']
+            i = j
+        else:
+            out.append(line[i])
+            i += 1
+    return ''.join(out)
 
 
 def _rewrite_ternary(code: str) -> str:
@@ -1951,6 +2293,144 @@ def _split_inline_blocks(code: str) -> str:
     return '\n'.join(result)
 
 
+def _heredoc_to_python(content: str, is_nowdoc: bool) -> str:
+    """Convert heredoc/nowdoc content to a Python string expression.
+
+    The result uses a regular string with explicit ``\\n`` escapes so that
+    it remains on a single logical line and is not misinterpreted by later
+    regex-based passes.
+
+    * **Nowdoc** (``<<<'LABEL'``): uses single-quoted Python string so that
+      ``_php_string_interpolation`` (which only processes double-quoted strings)
+      does not attempt to expand ``$`` references inside the raw content.
+    * **Heredoc** (``<<<LABEL``): uses a double-quoted Python f-string with
+      ``$var`` references converted to ``{__var}`` placeholders.
+
+    *content* is the raw string between the opening ``<<<LABEL`` and closing
+    ``LABEL`` lines (not including either).  *is_nowdoc* is ``True`` for
+    ``<<<'LABEL'`` (no interpolation) and ``False`` for plain ``<<<LABEL``
+    (supports ``$var`` interpolation like double-quoted strings).
+    """
+
+    def _escape_single(s: str) -> str:
+        """Escape content for a Python single-quoted string literal."""
+        return (
+            s
+            .replace('\\', '\\\\')
+            .replace("'", "\\'")
+            .replace('\n', '\\n')
+            .replace('\r', '\\r')
+            .replace('\t', '\\t')
+        )
+
+    def _escape_double(s: str) -> str:
+        """Escape content for a Python double-quoted string literal."""
+        return (
+            s
+            .replace('\\', '\\\\')
+            .replace('"', '\\"')
+            .replace('\n', '\\n')
+            .replace('\r', '\\r')
+            .replace('\t', '\\t')
+        )
+
+    if is_nowdoc:
+        # Single-quoted → not touched by _php_string_interpolation
+        return f"'{_escape_single(content)}'"
+
+    # --- Heredoc with variable interpolation ---
+    if '$' not in content:
+        return f'"{_escape_double(content)}"'
+
+    # Save {$var} / {$var[key]} brace-delimited interpolations first
+    saved: list[str] = []
+
+    def _save_brace(bm: re.Match) -> str:
+        saved.append(bm.group(0))
+        return f'\x00{len(saved) - 1}\x00'
+
+    content = re.sub(r'\{\$(\w+)(?:\[[^\]]*\])?\}', _save_brace, content)
+
+    # Escape for f-string content (backslashes, quotes, newlines)
+    content = _escape_double(content)
+    # Escape literal { and } (that are NOT from saved interpolations)
+    content = content.replace('{', '{{').replace('}', '}}')
+
+    # Restore brace interpolations as Python f-string placeholders
+    for idx, bv in enumerate(saved):
+        py = re.sub(
+            r'\{\$(\w+)(\[[^\]]*\])?\}',
+            lambda bm: '{__' + bm.group(1) + (bm.group(2) or '') + '}',
+            bv,
+        )
+        content = content.replace(f'\x00{idx}\x00', py)
+
+    # $var[key] → {__var[key]}
+    content = re.sub(r'\$(\w+)(\[[^\]]*\])', r'{__\1\2}', content)
+    # $var → {__var}
+    content = re.sub(r'\$(\w+)', r'{__\1}', content)
+
+    return f'f"{content}"'
+
+
+def _rewrite_heredoc(code: str) -> str:
+    r"""Convert PHP heredoc/nowdoc multi-line strings to Python triple-quoted strings.
+
+    Heredoc  (``<<<EOT`` … ``EOT``)  supports ``$var`` interpolation.
+    Nowdoc   (``<<<'EOT'`` … ``EOT``)  is a raw string — no interpolation.
+
+    Must run *before* ``_php_string_interpolation`` (step 0) so that the
+    ``$var`` references inside heredoc content are not seen as part of a
+    double-quoted PHP string.
+    """
+    if '<<<' not in code:
+        return code
+
+    heredoc_re = re.compile(r"^([ \t]*.*?)<<<(['\"]?)(\w+)\2[ \t]*$")
+    close_re_tmpl = r'^({label})[;,]?[ \t]*$'
+
+    lines = code.split('\n')
+    result: list[str] = []
+    i = 0
+
+    while i < len(lines):
+        m = heredoc_re.match(lines[i])
+        if not m:
+            result.append(lines[i])
+            i += 1
+            continue
+
+        prefix = m.group(1)           # code on same line before <<<
+        quote_style = m.group(2)      # "'" for nowdoc, "" for heredoc
+        label = m.group(3)            # e.g. "EOT"
+        is_nowdoc = (quote_style == "'")
+        close_re = re.compile(close_re_tmpl.format(label=re.escape(label)))
+
+        # Collect content lines until the closing label
+        j = i + 1
+        content_lines: list[str] = []
+        after_label = ''
+        while j < len(lines):
+            cm = close_re.match(lines[j].rstrip())
+            if cm:
+                # Anything after the label on the same line (e.g. ";" or ",")
+                rest = lines[j][len(label):]
+                after_label = rest.rstrip()
+                break
+            content_lines.append(lines[j])
+            j += 1
+
+        # PHP heredoc includes the newline that precedes the closing label
+        content = '\n'.join(content_lines)
+        if content_lines:
+            content += '\n'
+        py_str = _heredoc_to_python(content, is_nowdoc)
+        result.append(prefix + py_str + after_label)
+        i = j + 1  # skip the closing label line
+
+    return '\n'.join(result)
+
+
 def _php_string_interpolation(code: str) -> str:
     """Convert PHP double-quoted strings that contain $variables to Python f-strings.
 
@@ -2340,6 +2820,11 @@ def _rewrite_require(path: str) -> str:
 
 
 def php_to_python(code: str) -> str:
+    # -1. Heredoc/nowdoc strings: <<<EOT ... EOT -> Python triple-quoted (f-)strings.
+    #     Must run before step 0 (string interpolation) so $vars inside heredoc
+    #     content are converted to {__var} f-string placeholders before the
+    #     global $var->__var pass replaces them with __var (dropping the braces).
+    code = _rewrite_heredoc(code)
     # 0. String interpolation: "Hello $name" -> f"Hello {__name}"
     #    Must run first so $vars inside double-quoted strings are handled before
     #    the global $var->__var substitution (which skips string contents).
@@ -2347,6 +2832,11 @@ def php_to_python(code: str) -> str:
     # 0b. define('CONST', val) / const NAME = val  ->  NAME = val
     #     Must run before $var->__var so that constant names (no $) are unaffected.
     code = _rewrite_define_const(code)
+    # 0b2. PHP 8 match() expression: match($x) { 1 => "a", default => "b" }
+    #      Must run before array conversion (step 1a) because match arms use '=>'
+    #      which would otherwise be mistaken for associative-array separators.
+    code = _normalize_match(code)
+    code = _rewrite_match_expr(code)
     # 0c. do { } while (cond);  ->  while True { ... if not cond: break }
     #     Must run before C-for and brace conversion.
     code = _rewrite_do_while(code)
@@ -2381,6 +2871,24 @@ def php_to_python(code: str) -> str:
     # 0a. Class syntax preprocessing (must run before foreach/$var/function steps).
     #     i. Remove 'abstract' from class declarations: abstract class Foo -> class Foo
     code = re.sub(r'\babstract\s+(?=class\b)', '', code)
+    #     i2. interface Foo { ... }  ->  class Foo:  (Python has no interface enforcement)
+    #         Use [^\S\n]+ (horizontal space only) instead of \s+ to avoid matching
+    #         the word 'interface' at the end of a // comment and the class name on
+    #         the following line.
+    code = re.sub(r'\binterface[^\S\n]+(\w+)', r'class \1', code)
+    #     i3. class Foo implements Bar, Baz -> class Foo(Bar, Baz) (before extends handling)
+    #         class Foo extends Bar implements Baz -> class Foo(Bar, Baz) (combined)
+    def _implements_repl(m: re.Match) -> str:
+        name = m.group(1)
+        bases = re.sub(r'\s+', '', m.group(2))  # strip whitespace between names
+        return f'class {name}({bases})'
+    # class Foo implements Bar, Baz  (no extends)
+    code = re.sub(
+        r'\bclass\s+(\w+)\s+implements\s+([\w,\s]+)',
+        _implements_repl,
+        code,
+    )
+    # Note: 'class Foo(Bar) implements Baz' is handled AFTER extends conversion (step vii2)
     #     ii. Remove no-value property declarations (with optional type annotation):
     #         public $name;      ->  (removed)
     #         private int $name; ->  (removed, type already stripped by step 0i)
@@ -2430,6 +2938,15 @@ def php_to_python(code: str) -> str:
     )
     #     vii. class Foo extends Bar -> class Foo(Bar)
     code = _re_class_extends.sub(r'class \1(\2)', code)
+    #     vii2. Strip 'implements ...' that remains after extends conversion:
+    #           class Foo(Bar) implements Baz -> class Foo(Bar)
+    #           Must run AFTER vii so that 'class Foo extends Bar implements Baz'
+    #           has already been converted to 'class Foo(Bar) implements Baz'.
+    code = re.sub(
+        r'(class\s+\w+\s*\([^)]*\))\s+implements\s+[\w,\s]+',
+        r'\1',
+        code,
+    )
     # 1. PHP elseif -> Python elif (before step 2 which normalises block headers)
     code = re.sub(r'\belseif\b', 'elif', code)
     # 1b. Collapse multi-line foreach(...) expressions onto a single line so
@@ -2496,6 +3013,10 @@ def php_to_python(code: str) -> str:
     # 4g. PHP logical AND/OR: && -> and,  || -> or  (outside strings)
     code = _sub_outside_strings(_re_logical_and, 'and', code)
     code = _sub_outside_strings(_re_logical_or, 'or', code)
+    # 4h. PHP 8 null-safe operator: $obj?->member -> _php_nullsafe($obj, lambda _o: _o->member)
+    #     Must run before step 5 (-> to .) so the -> inside the generated lambda is
+    #     also converted.  Must run before step 8 ($var -> __var) for the same reason.
+    code = _rewrite_nullsafe(code)
     # 5. -> to .  outside strings
     code = _sub_outside_strings(re.compile(r'->'), '.', code)
     # 5a. Dynamic property access: $this->$k (now self.$k after steps 4d+5).
@@ -2539,7 +3060,28 @@ def php_to_python(code: str) -> str:
     # 8b2. :: (static method / property / class-constant access) -> .
     #      parent:: is already resolved above; remaining :: are ClassName::member.
     code = _sub_outside_strings(re.compile(r'::'), '.', code)
+    # 8b3. PHP variable functions: __var(args) -> _call_var(__var)(args)
+    #      In PHP, a variable holding a function name can be called: $func($arg).
+    #      After step 8 ($var -> __var), this becomes __func($arg), but Python
+    #      strings are not callable.  Wrap with _call_var() which resolves the name.
+    #      Guard: skip matches where a 'def ' or 'function ' keyword precedes the
+    #      name (function *definitions* must not be wrapped, only *calls*).
+    #      Also skip Python dunder methods (names ending with '__').
+    code = _sub_outside_strings(
+        re.compile(
+            r'(?<![.\w])((?:def|function)\s+)?(__[A-Za-z][A-Za-z0-9_]*(?<!_))\('
+        ),
+        lambda m: m.group(0) if m.group(1) else f'_call_var({m.group(2)})(',
+        code,
+    )
     # 8c. PHP function declarations -> Python def (after $var->__var so params are __name)
+    #     Abstract method stub: function foo(__a); -> function foo(__a) {}
+    #     (interface/abstract class methods have no body, just a semicolon)
+    code = re.sub(
+        r'\bfunction[ \t]+(\w+)[ \t]*\(([^)]*)\)[ \t]*;',
+        r'function \1(\2) {}',
+        code,
+    )
     #     Empty body: function foo(__a) {} -> def foo(__a): pass
     code = _sub_outside_strings(
         _re_func_empty,
@@ -2600,6 +3142,10 @@ def php_to_python(code: str) -> str:
     #     Must run after $var -> __var (step 8) and after null-coalesce (step 8e)
     #     so ?? is already gone and we only see bare '?'.
     code = _rewrite_ternary(code)
+    # 8l. PHP spaceship operator: $a <=> $b -> _php_spaceship(__a, __b)
+    #     Must run after $var -> __var (step 8) and after ternary (step 8k) so that
+    #     no stray '?' or ':' confuse the operand boundary detection.
+    code = _rewrite_spaceship(code)
     # 9. echo -> _out.write(str(a), str(b), …)  — works in all positions (MULTILINE)
     #    Supports comma-separated echo arguments:
     #      echo "hello", "world"  ->  _out.write(str("hello"), str("world"))
