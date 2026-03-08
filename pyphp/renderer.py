@@ -131,7 +131,7 @@ class PyToken:
 
 
 _TAG_PHP      = re.compile(r'<\?php\s*(.*?)\s*\?>', re.DOTALL)
-_TAG_EXPR     = re.compile(r'<\?=\s*(.*?)\s*\?>')
+_TAG_EXPR     = re.compile(r'<\?=\s*(.*?)\s*\?>', re.DOTALL)
 _TAG_PY       = re.compile(r'<\?py\s*(.*?)\s*\?>', re.DOTALL)
 _HTML_COMMENT = re.compile(r'<!--.*?-->', re.DOTALL)
 
