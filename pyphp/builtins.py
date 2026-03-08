@@ -92,50 +92,109 @@ class _PHPParseError(_PHPError):
     _php_name = 'ParseError'
 
 
-class PhpArray(dict):
+class PhpArray(list):
     """PHP-style ordered array.
 
-    Behaves like a Python ``dict`` (supports any-type keys) but also provides
-    list-compatible helpers so that sequential PHP arrays work naturally:
+    Inherits from Python ``list`` so that ``isinstance(x, list)`` is True for
+    all PHP sequential arrays, eliminating common gotchas when interfacing with
+    Python code that checks for list types.
 
-    * ``append(val)``  — append with the next auto-increment integer key (PHP ``$arr[] = val``)
-    * ``extend(vals)`` — append multiple values
-    * ``sort(...)``    — sort values in-place, re-keying from 0
-    * ``__iter__``     — iterates over *values* (PHP ``foreach ($a as $v)`` semantics)
-    * ``__eq__``       — compares equal to a plain Python list with the same values
+    * Integer-indexed entries live in the underlying ``list`` at their index.
+    * Non-integer keys (strings, objects) are stored in the internal ``_map``
+      dict for PHP mixed/associative-array support.
+    * ``append(val)`` / ``$arr[] = val`` — delegates to ``list.append``.
+    * ``__iter__`` — yields list values first, then ``_map`` values (PHP
+      ``foreach``-as-value semantics).
+    * ``__eq__`` — compares correctly against plain Python lists and dicts.
     """
 
-    # ── list-style helpers ────────────────────────────────────────────────────
+    def __init__(self, values=()):
+        list.__init__(self)
+        self._map = {}
+        for v in values:
+            list.append(self, v)
 
-    def append(self, val):
-        """Append *val* with the next sequential integer key."""
-        next_key = max((k for k in dict.keys(self) if isinstance(k, int)), default=-1) + 1
-        self[next_key] = val
+    # ── key/index access ──────────────────────────────────────────────────────
 
-    def extend(self, vals):
-        """Append multiple values sequentially."""
-        for v in vals:
-            self.append(v)
+    def __setitem__(self, key, val):
+        if isinstance(key, int) and key >= 0:
+            # Grow the list to accommodate the index if needed (PHP semantics).
+            gap = key - list.__len__(self) + 1
+            if gap > 0:
+                list.extend(self, [None] * gap)
+            list.__setitem__(self, key, val)
+        elif isinstance(key, slice):
+            list.__setitem__(self, key, val)
+        else:
+            # Non-positive int or non-integer key: store in _map.
+            self._map[key] = val
 
-    def sort(self, key=None, reverse=False):
-        """Sort values in-place, re-keying integer keys starting at 0."""
-        sorted_vals = sorted(self.values(), key=key, reverse=reverse)
-        self.clear()
-        self.update(enumerate(sorted_vals))
+    def __getitem__(self, key):
+        if isinstance(key, int) and key >= 0:
+            return list.__getitem__(self, key)
+        if isinstance(key, slice):
+            return list.__getitem__(self, key)
+        return self._map[key]
 
-    # ── iteration & comparison ────────────────────────────────────────────────
+    def __delitem__(self, key):
+        if isinstance(key, int) and key >= 0:
+            list.__delitem__(self, key)
+        elif isinstance(key, slice):
+            list.__delitem__(self, key)
+        else:
+            del self._map[key]
+
+    # ── sizing & membership ───────────────────────────────────────────────────
+
+    def __len__(self):
+        return list.__len__(self) + len(self._map)
+
+    # ── iteration ─────────────────────────────────────────────────────────────
 
     def __iter__(self):
-        """Iterate over values (PHP foreach-as-value semantics)."""
-        return iter(dict.values(self))
+        """Iterate over values (list values first, then _map values)."""
+        return itertools.chain(list.__iter__(self), iter(self._map.values()))
+
+    # ── dict-compatible helpers ───────────────────────────────────────────────
+
+    def keys(self):
+        """Return all keys: integer indices 0…n-1, then _map keys."""
+        return itertools.chain(range(list.__len__(self)), self._map.keys())
+
+    def values(self):
+        """Return all values: list values, then _map values."""
+        return itertools.chain(list.__iter__(self), iter(self._map.values()))
+
+    def items(self):
+        """Return (key, value) pairs: integer-indexed first, then _map pairs."""
+        return itertools.chain(
+            enumerate(list.__iter__(self)),
+            self._map.items(),
+        )
+
+    def clear(self):
+        """Clear both the list and the _map."""
+        list.clear(self)
+        self._map.clear()
+
+    # ── comparison ────────────────────────────────────────────────────────────
 
     def __eq__(self, other):
+        if isinstance(other, PhpArray):
+            return list.__eq__(self, other) and self._map == other._map
         if isinstance(other, list):
-            return list(dict.values(self)) == other
-        return dict.__eq__(self, other)
+            if self._map:
+                return False
+            return list.__eq__(self, other)
+        if isinstance(other, dict):
+            return dict(self.items()) == other
+        return NotImplemented
 
     def __repr__(self):
-        return f"PhpArray({dict.__repr__(self)})"
+        base = list.__repr__(self)
+        if self._map:
+            return f"PhpArray({base}, map={self._map!r})"
+        return f"PhpArray({base})"
 
 
 def _make_php_builtins() -> dict:
@@ -153,9 +212,9 @@ def _make_php_builtins() -> dict:
         # count is PHP's optional by-reference replacement-count argument;
         # it is accepted here to avoid TypeError but is not updated (Python
         # does not support pass-by-reference semantics for plain variables).
-        # PHP array literals become PhpArray (dict subclass), not Python list.
-        if isinstance(search, (list, PhpArray)):
-            replaces = replace if isinstance(replace, (list, PhpArray)) else [replace] * len(search)
+        # PhpArray is now a list subclass, so isinstance(x, list) covers both.
+        if isinstance(search, list):
+            replaces = replace if isinstance(replace, list) else [replace] * len(search)
             for s, r in zip(search, replaces):
                 subject = str(subject).replace(str(s), str(r))
             return subject
@@ -266,7 +325,16 @@ def _make_php_builtins() -> dict:
         if strict:
             return any(v is needle or (type(v) is type(needle) and v == needle) for v in items)
         return needle in items
-    def _array_key_exists(key, arr):        return key in _to_array(arr)
+    def _array_key_exists(key, arr):
+        arr = _to_array(arr)
+        if isinstance(arr, dict):
+            return key in arr
+        if isinstance(arr, PhpArray):
+            if isinstance(key, int):
+                return 0 <= key < list.__len__(arr)
+            return key in arr._map
+        # plain list
+        return isinstance(key, int) and 0 <= key < len(arr)
     def _array_keys(arr, search_value=None, strict=False):
         arr = _to_array(arr)
         if search_value is not None:
@@ -1276,9 +1344,7 @@ def _make_php_builtins() -> dict:
 
     def _php_list(*args):
         """Create a PHP-style sequential array (PhpArray) from positional values."""
-        a = PhpArray()
-        a.update(enumerate(args))
-        return a
+        return PhpArray(args)
     def _hash(algo, data, raw_output=False):
         import hashlib
         normalized_algo = str(algo).lower().replace('-', '')
