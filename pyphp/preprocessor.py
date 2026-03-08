@@ -108,6 +108,8 @@ _re_strict_eq  = re.compile(r'===')
 # PHP logical AND/OR operators: && -> and,  || -> or  (outside strings)
 _re_logical_and = re.compile(r'&&')
 _re_logical_or  = re.compile(r'\|\|')
+# Static property access: ClassName::$Prop -> ClassName::Prop  (strip $ before __var step)
+_re_static_prop = re.compile(r'::\$(\w+)')
 
 
 def _inject_self_into_def(content: str) -> str:
@@ -2501,7 +2503,7 @@ def php_to_python(code: str) -> str:
     #     getting the __ prefix, which would trigger Python's name-mangling inside
     #     class bodies (e.g. config::$TypeInfos -> config.__TypeInfos inside class
     #     Foo would become config._Foo__TypeInfos).
-    code = _sub_outside_strings(re.compile(r'::\$(\w+)'), r'::\1', code)
+    code = _sub_outside_strings(_re_static_prop, r'::\1', code)
     # 8. $var -> __var  outside strings (protects XPath ".//field[@name]")
     code = _sub_outside_strings(_re_var, r'__\1', code)
     # 8a. list($a,$b) = ... -> __a, __b = ...  (list() wrapper stripped after var subst)
