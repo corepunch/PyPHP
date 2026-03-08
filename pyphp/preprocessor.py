@@ -108,7 +108,9 @@ _re_strict_eq  = re.compile(r'===')
 # PHP logical AND/OR operators: && -> and,  || -> or  (outside strings)
 _re_logical_and = re.compile(r'&&')
 _re_logical_or  = re.compile(r'\|\|')
-# Static property access: ClassName::$Prop -> ClassName::Prop  (strip $ before __var step)
+# Static property access: ClassName::$Prop -> ClassName::_s_Prop  (add _s_ prefix, strip $ before __var step)
+# Using _s_ prefix distinguishes static properties from class constants (ClassName::CONST),
+# so that config::TypeInfos (no $) correctly fails while config::$TypeInfos works.
 _re_static_prop = re.compile(r'::\$(\w+)')
 
 
@@ -2388,11 +2390,26 @@ def php_to_python(code: str) -> str:
         code,
         flags=re.MULTILINE,
     )
-    #     iii. Property declarations with values: public $name = val; -> name = val;
-    #          Strip both the access modifier AND the $ so the name is not __-prefixed.
+    #     iii. Property declarations with values:
+    #          public $name = val;        -> name = val;   (instance property)
+    #          public static $name = val; -> _s_name = val; (static property, _s_ prefix)
+    #          The _s_ prefix ensures that ClassName::$Prop and ClassName::Prop resolve
+    #          to different attributes, so only the $-prefixed PHP access works.
+    def _class_prop_decl_repl(m: re.Match) -> str:
+        """Map a PHP property declaration to a Python attribute assignment.
+
+        Static properties (``public static $name = val``) get a ``_s_`` prefix
+        so that ``ClassName::$name`` (via step 7b) resolves to ``ClassName._s_name``
+        while ``ClassName::name`` (without ``$``) maps to the *different* Python
+        attribute ``ClassName.name``, correctly failing at runtime.
+        Instance properties (``public $name = val``) are left as plain ``name``.
+        """
+        is_static = m.group(1) is not None
+        name = m.group(2)
+        return f'_s_{name} =' if is_static else f'{name} ='
     code = re.sub(
-        r'\b(?:public|private|protected)\s+(?:static\s+)?\$(\w+)\s*=',
-        r'\1 =',
+        r'\b(?:public|private|protected)\s+(static\s+)?\$(\w+)\s*=',
+        _class_prop_decl_repl,
         code,
     )
     #     iv. Static method declarations: public static function -> @staticmethod\nfunction
@@ -2498,12 +2515,14 @@ def php_to_python(code: str) -> str:
     #     Uses _sub_cast_outside_strings (not _sub_outside_strings) so the pattern can
     #     match subscripts that contain string literals, e.g. (string)$widget['name'].
     code = _sub_cast_outside_strings(_re_cast, _cast_repl, code)
-    # 7b. Static property access: ClassName::$Prop -> ClassName::Prop
+    # 7b. Static property access: ClassName::$Prop -> ClassName::_s_Prop
     #     Must run BEFORE step 8 ($var -> __var) to prevent the property name from
     #     getting the __ prefix, which would trigger Python's name-mangling inside
     #     class bodies (e.g. config::$TypeInfos -> config.__TypeInfos inside class
     #     Foo would become config._Foo__TypeInfos).
-    code = _sub_outside_strings(_re_static_prop, r'::\1', code)
+    #     The _s_ prefix distinguishes static properties from class constants, so
+    #     config::TypeInfos (no $) does NOT accidentally access the static property.
+    code = _sub_outside_strings(_re_static_prop, r'::_s_\1', code)
     # 8. $var -> __var  outside strings (protects XPath ".//field[@name]")
     code = _sub_outside_strings(_re_var, r'__\1', code)
     # 8a. list($a,$b) = ... -> __a, __b = ...  (list() wrapper stripped after var subst)

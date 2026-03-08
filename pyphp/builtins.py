@@ -153,8 +153,9 @@ def _make_php_builtins() -> dict:
         # count is PHP's optional by-reference replacement-count argument;
         # it is accepted here to avoid TypeError but is not updated (Python
         # does not support pass-by-reference semantics for plain variables).
-        if isinstance(search, list):
-            replaces = replace if isinstance(replace, list) else [replace] * len(search)
+        # PHP array literals become PhpArray (dict subclass), not Python list.
+        if isinstance(search, (list, PhpArray)):
+            replaces = replace if isinstance(replace, (list, PhpArray)) else [replace] * len(search)
             for s, r in zip(search, replaces):
                 subject = str(subject).replace(str(s), str(r))
             return subject

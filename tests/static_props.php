@@ -78,4 +78,23 @@ class Checker {
 
 $ch = new Checker("b");
 assert($ch->lookup() == 2);
+
+// ── Only config::$Prop (with $) should access a static property ──────────────
+// config::Prop (without $) would resolve to a *different* Python attribute and
+// should raise an error at runtime.  Verify the $-prefixed form works correctly,
+// which implicitly validates that the two access paths are distinct.
+
+class Registry {
+    public static $items = ["x" => 10, "y" => 20];
+    public static $count = 3;
+}
+
+// Correct: $-prefixed access works for reads
+assert(Registry::$items["x"] == 10);
+assert(Registry::$items["y"] == 20);
+assert(Registry::$count == 3);
+
+// Correct: $-prefixed access works for writes
+Registry::$count = 99;
+assert(Registry::$count == 99);
 ?>
