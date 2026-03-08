@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .preprocessor import php_to_python, _rewrite_require
-from .builtins import _PHP_BUILTINS
+from .builtins import _PHP_BUILTINS, PhpArray
 
 
 # ── PHP error ─────────────────────────────────────────────────────────────────
@@ -282,12 +282,15 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
         scope[k] = v
         scope[f'__{k}'] = v
     # _items(): foreach ($x as $k => $v) works on both dicts and lists.
-    # Use isinstance(dict) rather than hasattr('items') so that objects whose
-    # __getattr__ proxy happens to return a truthy 'items' child (e.g.
-    # SimpleXMLElementList) are not incorrectly treated as mappings.
+    # PhpArray is checked explicitly (before the dict branch) so its items()
+    # method is used for correct (key, value) iteration over both sequential
+    # and mixed arrays.  Plain dicts follow.  We avoid hasattr('items') because
+    # __getattr__ proxies (e.g. SimpleXMLElementList) could falsely match.
     def _items(obj):
         import types
-        if isinstance(obj, dict):
+        if isinstance(obj, PhpArray):
+            return obj.items()
+        elif isinstance(obj, dict):
             return obj.items()
         elif isinstance(obj, types.GeneratorType):
             return obj

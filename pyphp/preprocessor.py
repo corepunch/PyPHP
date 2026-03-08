@@ -2445,8 +2445,8 @@ def php_to_python(code: str) -> str:
         code
     )
     # 1a. Convert PHP array literals and array() calls to Python dicts / lists.
-    #     ['key' => val]  →  {'key': val}  (associative / dict)
-    #     ['a', 'b']      →  ['a', 'b']    (sequential / list, unchanged)
+    #     ['key' => val]  →  {'key': val}       (associative / plain dict)
+    #     ['a', 'b']      →  _php_list('a','b') (sequential / PhpArray, list subclass)
     #     array(k => v)   →  {k: v}
     #     Runs after foreach so the '=>' in 'foreach ($a as $k => $v)' is already
     #     consumed and won't be mistaken for an array element separator.

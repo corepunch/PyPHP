@@ -1,7 +1,7 @@
 <?php
 // ── PHP array (PhpArray) tests ────────────────────────────────────────────────
-// [] now creates a PHP-style ordered dictionary (PhpArray) that supports
-// any-type keys, not just integer indices.
+// [] now creates a PHP-style ordered array (PhpArray) that inherits from
+// Python list, so isinstance(x, list) is True for all sequential PHP arrays.
 
 // ── Empty array can accept non-integer keys ───────────────────────────────────
 
@@ -133,4 +133,22 @@ assert($arr3[1] == 8);
 $arr4 = array("a", "b");
 $arr4[] = "c";
 assert($arr4 == ["a", "b", "c"]);
+
+// ── PhpArray is a list subclass (no isinstance gotchas) ──────────────────────
+?>
+<?py
+from pyphp.builtins import PhpArray
+__seq = _php_list('x', 'y', 'z')
+assert isinstance(__seq, list), "PhpArray must be a list subclass"
+assert isinstance(__seq, PhpArray), "PhpArray must be a PhpArray instance"
+?>
+<?php
+
+// ── array_key_exists on sequential array ─────────────────────────────────────
+
+$seq = ["a", "b", "c"];
+assert(array_key_exists(0, $seq));
+assert(array_key_exists(2, $seq));
+assert(!array_key_exists(3, $seq));
+assert(!array_key_exists("x", $seq));
 ?>
