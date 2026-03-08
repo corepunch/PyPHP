@@ -92,6 +92,52 @@ class _PHPParseError(_PHPError):
     _php_name = 'ParseError'
 
 
+class PhpArray(dict):
+    """PHP-style ordered array.
+
+    Behaves like a Python ``dict`` (supports any-type keys) but also provides
+    list-compatible helpers so that sequential PHP arrays work naturally:
+
+    * ``append(val)``  — append with the next auto-increment integer key (PHP ``$arr[] = val``)
+    * ``extend(vals)`` — append multiple values
+    * ``sort(...)``    — sort values in-place, re-keying from 0
+    * ``__iter__``     — iterates over *values* (PHP ``foreach ($a as $v)`` semantics)
+    * ``__eq__``       — compares equal to a plain Python list with the same values
+    """
+
+    # ── list-style helpers ────────────────────────────────────────────────────
+
+    def append(self, val):
+        """Append *val* with the next sequential integer key."""
+        next_key = max((k for k in dict.keys(self) if isinstance(k, int)), default=-1) + 1
+        self[next_key] = val
+
+    def extend(self, vals):
+        """Append multiple values sequentially."""
+        for v in vals:
+            self.append(v)
+
+    def sort(self, key=None, reverse=False):
+        """Sort values in-place, re-keying integer keys starting at 0."""
+        sorted_vals = sorted(self.values(), key=key, reverse=reverse)
+        self.clear()
+        self.update(enumerate(sorted_vals))
+
+    # ── iteration & comparison ────────────────────────────────────────────────
+
+    def __iter__(self):
+        """Iterate over values (PHP foreach-as-value semantics)."""
+        return iter(dict.values(self))
+
+    def __eq__(self, other):
+        if isinstance(other, list):
+            return list(dict.values(self)) == other
+        return dict.__eq__(self, other)
+
+    def __repr__(self):
+        return f"PhpArray({dict.__repr__(self)})"
+
+
 def _make_php_builtins() -> dict:
     """Build a dict of common PHP built-in functions mapped to Python equivalents."""
 
@@ -215,10 +261,10 @@ def _make_php_builtins() -> dict:
 
     def _in_array(needle, haystack, strict=False):
         haystack = _to_array(haystack)
+        items = haystack.values() if isinstance(haystack, dict) else haystack
         if strict:
-            items = haystack.values() if isinstance(haystack, dict) else haystack
             return any(v is needle or (type(v) is type(needle) and v == needle) for v in items)
-        return needle in haystack
+        return needle in items
     def _array_key_exists(key, arr):        return key in _to_array(arr)
     def _array_keys(arr, search_value=None, strict=False):
         arr = _to_array(arr)
@@ -242,7 +288,11 @@ def _make_php_builtins() -> dict:
         result: dict = {}
         for d in args:
             if hasattr(d, 'items'):
-                result.update(d)
+                for k, v in d.items():
+                    if isinstance(k, int):
+                        result[len(result)] = v  # re-index sequential keys
+                    else:
+                        result[k] = v            # string keys overwrite
             else:
                 for v in d:
                     result[len(result)] = v
@@ -275,18 +325,52 @@ def _make_php_builtins() -> dict:
             return dict(items) if preserve_keys else [v for _, v in items]
         return list(reversed(arr))
     def _array_unique(arr, flags=None):    return list(dict.fromkeys(_to_array(arr)))
-    def _array_push(arr, *vals):         arr.extend(vals); return len(arr)
-    def _array_pop(arr):                 return arr.pop()
-    def _array_shift(arr):               return arr.pop(0)
+    def _array_push(arr, *vals):
+        if hasattr(arr, 'append'):
+            for v in vals:
+                arr.append(v)
+        else:
+            arr.extend(vals)
+        return len(arr)
+    def _array_pop(arr):
+        if isinstance(arr, dict):
+            if not arr:
+                return None
+            last_key = next(reversed(arr.keys()))
+            return arr.pop(last_key)
+        return arr.pop()
+    def _array_shift(arr):
+        if isinstance(arr, dict):
+            if not arr:
+                return None
+            first_key = next(iter(arr.keys()))
+            return arr.pop(first_key)
+        return arr.pop(0)
     def _array_unshift(arr, *vals):
-        for v in reversed(vals):
-            arr.insert(0, v)
+        if isinstance(arr, dict):
+            # Shift all integer keys up by len(vals), then insert new ones at front
+            shift = len(vals)
+            new_items = [(k + shift if isinstance(k, int) else k, v) for k, v in arr.items()]
+            arr.clear()
+            for i, v in enumerate(vals):
+                arr[i] = v
+            arr.update(new_items)
+        else:
+            for v in reversed(vals):
+                arr.insert(0, v)
         return len(arr)
     def _array_slice(arr, offset, length=None, _pk=False):
         arr = _to_array(arr)
+        if isinstance(arr, dict):
+            vals = list(dict.values(arr))
+            sliced = vals[offset : offset + length] if length is not None else vals[offset:]
+            return sliced
         return arr[offset : offset + length] if length is not None else arr[offset:]
     def _array_chunk(arr, size, _pk=False):
         arr = _to_array(arr)
+        if isinstance(arr, dict):
+            vals = list(dict.values(arr))
+            return [vals[i : i + size] for i in range(0, len(vals), size)]
         return [arr[i : i + size] for i in range(0, len(arr), size)]
     def _array_sum(arr):                 return sum(_to_array(arr))
     def _array_flip(arr):
@@ -307,9 +391,30 @@ def _make_php_builtins() -> dict:
     def _array_combine(keys, values):    return dict(zip(_to_array(keys), _to_array(values)))
     def _array_fill(start_index, num, value):
         return {start_index + i: value for i in range(num)}
-    def _sort(arr, flags=None):              arr.sort(); return True
-    def _rsort(arr, flags=None):             arr.sort(reverse=True); return True
-    def _usort(arr, fn):                 arr.sort(key=fn); return True
+    def _sort(arr, flags=None):
+        if isinstance(arr, dict):
+            sorted_vals = sorted(dict.values(arr))
+            arr.clear()
+            arr.update(enumerate(sorted_vals))
+        else:
+            arr.sort()
+        return True
+    def _rsort(arr, flags=None):
+        if isinstance(arr, dict):
+            sorted_vals = sorted(dict.values(arr), reverse=True)
+            arr.clear()
+            arr.update(enumerate(sorted_vals))
+        else:
+            arr.sort(reverse=True)
+        return True
+    def _usort(arr, fn):
+        if isinstance(arr, dict):
+            sorted_vals = sorted(dict.values(arr), key=fn)
+            arr.clear()
+            arr.update(enumerate(sorted_vals))
+        else:
+            arr.sort(key=fn)
+        return True
 
     # ── math / type helpers ───────────────────────────────────────────────────
     def _intval(x, base=10):
@@ -1153,7 +1258,7 @@ def _make_php_builtins() -> dict:
         if not arr:
             return None
         if isinstance(arr, dict):
-            return next(iter(arr))
+            return next(iter(arr.keys()))
         return 0
 
     def _array_key_last(arr):
@@ -1161,7 +1266,7 @@ def _make_php_builtins() -> dict:
         if not arr:
             return None
         if isinstance(arr, dict):
-            return next(reversed(arr))
+            return next(reversed(arr.keys()))
         return len(arr) - 1
 
     def _list_assign(*args):
@@ -1169,7 +1274,10 @@ def _make_php_builtins() -> dict:
         return args
 
     def _php_list(*args):
-        return args
+        """Create a PHP-style sequential array (PhpArray) from positional values."""
+        a = PhpArray()
+        a.update(enumerate(args))
+        return a
     def _hash(algo, data, raw_output=False):
         import hashlib
         normalized_algo = str(algo).lower().replace('-', '')
@@ -1308,6 +1416,7 @@ def _make_php_builtins() -> dict:
         'uksort':              _uksort,
         'range':               _php_range,
         'compact':             _compact,
+        '_php_list':           _php_list,
         # math
         'abs':                 abs,
         'ceil':                math.ceil,

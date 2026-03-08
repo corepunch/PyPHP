@@ -108,6 +108,8 @@ _re_strict_eq  = re.compile(r'===')
 # PHP logical AND/OR operators: && -> and,  || -> or  (outside strings)
 _re_logical_and = re.compile(r'&&')
 _re_logical_or  = re.compile(r'\|\|')
+# Static property access: ClassName::$Prop -> ClassName::Prop  (strip $ before __var step)
+_re_static_prop = re.compile(r'::\$(\w+)')
 
 
 def _inject_self_into_def(content: str) -> str:
@@ -215,17 +217,24 @@ def _echo_repl(m: re.Match) -> str:
 
 
 def _convert_php_arrays(code: str) -> str:
-    """Convert PHP array literals and array() calls to Python dicts or lists.
+    """Convert PHP array literals and array() calls to Python dicts or PhpArrays.
 
     Rules:
-    * ``['key' => val, ...]``  →  ``{'key': val, ...}``   (dict)
-    * ``['a', 'b']``           →  ``['a', 'b']``           (plain list, unchanged)
-    * ``array('key' => val)``  →  ``{'key': val}``         (dict)
-    * ``array('a', 'b')``      →  ``['a', 'b']``           (list)
+    * ``['key' => val, ...]``  →  ``{'key': val, ...}``       (associative dict)
+    * ``['a', 'b']``           →  ``_php_list('a', 'b')``     (sequential PhpArray)
+    * ``[]``                   →  ``_php_list()``              (empty PhpArray)
+    * ``array('key' => val)``  →  ``{'key': val}``             (associative dict)
+    * ``array('a', 'b')``      →  ``_php_list('a', 'b')``     (sequential PhpArray)
 
     A bracket pair that contains a top-level ``=>`` is treated as an associative
-    array and converted to a Python dict.  All other bracket pairs are left as
-    Python lists.  The function handles nested arrays recursively.
+    array and converted to a Python dict.  Sequential arrays are converted to
+    ``_php_list(...)`` which creates a PHP-style ordered array (``PhpArray``).
+
+    Subscript access (``$arr[0]``, ``$arr['key']``) is detected by checking the
+    character preceding the ``[``: if it is alphanumeric, ``_``, ``)``, ``]``,
+    ``"`` or ``'`` the bracket is a subscript and is left unchanged.
+
+    The function handles nested arrays recursively.
     """
     result: list[str] = []
     i = 0
@@ -292,6 +301,19 @@ def _convert_php_arrays(code: str) -> str:
         inner = _convert_php_arrays(inner)
         return inner, has_arrow
 
+    def _is_subscript() -> bool:
+        """Return True when the '[' at the current position is a subscript access.
+
+        A '[' is a subscript (not an array literal) when the immediately preceding
+        non-whitespace character in the output is an alphanumeric, ``_``, ``)``,
+        ``]``, ``"`` or ``'`` — i.e. it follows an expression.
+        """
+        for ch in reversed(result):
+            if ch in (' ', '\t'):
+                continue
+            return ch.isalnum() or ch in ('_', ')', ']', '"', "'")
+        return False
+
     while i < n:
         c = code[i]
 
@@ -305,6 +327,30 @@ def _convert_php_arrays(code: str) -> str:
             elif c == in_str:
                 in_str = None
             i += 1
+            continue
+
+        # Skip // line comments so apostrophes inside them don't confuse in_str.
+        # (Comment→# conversion runs later, after this step.)
+        if c == '/' and i + 1 < n and code[i + 1] == '/':
+            while i < n and code[i] != '\n':
+                result.append(code[i])
+                i += 1
+            continue
+
+        # Skip /* ... */ block comments for the same reason.
+        if c == '/' and i + 1 < n and code[i + 1] == '*':
+            result.append(code[i])
+            i += 1
+            result.append(code[i])
+            i += 1
+            while i < n - 1 and not (code[i] == '*' and code[i + 1] == '/'):
+                result.append(code[i])
+                i += 1
+            if i < n - 1:
+                result.append(code[i])
+                i += 1
+                result.append(code[i])
+                i += 1
             continue
 
         if c in ('"', "'"):
@@ -341,13 +387,13 @@ def _convert_php_arrays(code: str) -> str:
                 result.append(inner)
                 result.append('}')
             else:
-                result.append('[')
+                result.append('_php_list(')
                 result.append(inner)
-                result.append(']')
+                result.append(')')
             i = k
             continue
 
-        # Detect '[' — potential array literal
+        # Detect '[' — subscript access or array literal
         if c == '[':
             # Find the matching ']'
             bracket_start = i + 1
@@ -369,15 +415,24 @@ def _convert_php_arrays(code: str) -> str:
                     depth4 -= 1
                 k += 1
             body = code[bracket_start: k - 1]
-            inner, is_dict = _convert_inner(body)
-            if is_dict:
-                result.append('{')
-                result.append(inner)
-                result.append('}')
-            else:
+
+            if _is_subscript():
+                # Subscript access ($arr[key]): keep as [...], but still
+                # recursively convert any nested array literals inside the key.
                 result.append('[')
-                result.append(inner)
+                result.append(_convert_php_arrays(body))
                 result.append(']')
+            else:
+                # Array literal: convert to dict or _php_list(...)
+                inner, is_dict = _convert_inner(body)
+                if is_dict:
+                    result.append('{')
+                    result.append(inner)
+                    result.append('}')
+                else:
+                    result.append('_php_list(')
+                    result.append(inner)
+                    result.append(')')
             i = k
             continue
 
@@ -2369,7 +2424,7 @@ def php_to_python(code: str) -> str:
         code
     )
     code = _re_foreach_v.sub(
-        lambda m: f'for __{m.group(2)} in {_php_expr(m.group(1))}:',
+        lambda m: f'for __{m.group(2)} in _foreach_vals({_php_expr(m.group(1))}):',
         code
     )
     # 1a. Convert PHP array literals and array() calls to Python dicts / lists.
@@ -2443,6 +2498,12 @@ def php_to_python(code: str) -> str:
     #     Uses _sub_cast_outside_strings (not _sub_outside_strings) so the pattern can
     #     match subscripts that contain string literals, e.g. (string)$widget['name'].
     code = _sub_cast_outside_strings(_re_cast, _cast_repl, code)
+    # 7b. Static property access: ClassName::$Prop -> ClassName::Prop
+    #     Must run BEFORE step 8 ($var -> __var) to prevent the property name from
+    #     getting the __ prefix, which would trigger Python's name-mangling inside
+    #     class bodies (e.g. config::$TypeInfos -> config.__TypeInfos inside class
+    #     Foo would become config._Foo__TypeInfos).
+    code = _sub_outside_strings(_re_static_prop, r'::\1', code)
     # 8. $var -> __var  outside strings (protects XPath ".//field[@name]")
     code = _sub_outside_strings(_re_var, r'__\1', code)
     # 8a. list($a,$b) = ... -> __a, __b = ...  (list() wrapper stripped after var subst)

@@ -294,7 +294,14 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
         elif hasattr(obj, '__iter__'):
             return enumerate(obj)
 
+    def _foreach_vals(obj):
+        """foreach ($arr as $v): yield values for dicts, iterate directly for others."""
+        if isinstance(obj, dict):
+            return dict.values(obj)
+        return obj
+
     scope['_items'] = _items
+    scope['_foreach_vals'] = _foreach_vals
     scope['_out']  = _OutWriter()
     scope['_eval'] = ctx.make_eval(scope)
 
