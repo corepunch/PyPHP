@@ -1097,6 +1097,11 @@ def _rewrite_ternary_expr(expr: str) -> str:
         i += 1
 
     if q_pos < 0:
+        # No ternary found, but the expression may still contain ?? that was
+        # nested inside parentheses and therefore skipped by the earlier
+        # null-coalesce step (step 8e only processes top-level ??).
+        if '??' in expr:
+            return _rewrite_null_coalesce(expr)
         return expr
 
     cond = expr[:q_pos].strip()
@@ -1245,6 +1250,10 @@ def _rewrite_ternary_line(line: str) -> str:
         else:
             assignment_part = ''
             cond_expr = prefix.strip()
+
+    # If the condition itself contains ??, process it (e.g. ($a ?? $b) ? x : y).
+    if '??' in cond_expr:
+        cond_expr = _rewrite_ternary_expr(cond_expr)
 
     return f'{assignment_part}({true_val} if {cond_expr} else {false_val}){trailing}'
 
