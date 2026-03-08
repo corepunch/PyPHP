@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .preprocessor import php_to_python, _rewrite_require
-from .builtins import _PHP_BUILTINS, PhpArray
+from .builtins import _PHP_BUILTINS, PhpArray, _call_var, _make_scope_call_var
 
 
 # ── PHP error ─────────────────────────────────────────────────────────────────
@@ -305,6 +305,8 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
 
     scope['_items'] = _items
     scope['_foreach_vals'] = _foreach_vals
+    # PHP variable functions: $func($arg) — scope-aware version (no frame inspection)
+    scope['_call_var'] = _make_scope_call_var(scope)
     scope['_out']  = _OutWriter()
     scope['_eval'] = ctx.make_eval(scope)
 
