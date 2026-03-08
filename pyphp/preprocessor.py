@@ -720,16 +720,17 @@ def _rewrite_switch(code: str) -> str:
 
 
 def _split_single_line_if(code: str) -> str:
-    """Split single-line PHP if/while/elseif without braces into block form.
+    """Split single-line PHP if/while/elseif/foreach without braces into block form.
 
     if ($x > 0) echo $x;        →  if ($x > 0) {\n    echo $x;\n}
     while ($x > 0) $x--;        →  while ($x > 0) {\n    $x--;\n}
+    foreach ($a as $v) echo $v; →  foreach ($a as $v) {\n    echo $v;\n}
     if ($x > 0) { ... }         →  unchanged (already has braces)
     """
     lines = code.split('\n')
     result: list = []
     pat = re.compile(
-        r'^([ \t]*)(if|elseif|while)\s*\((.+)\)\s+([^{:].*)$'
+        r'^([ \t]*)(if|elseif|while|foreach)\s*\((.+)\)\s+([^{:].*)$'
     )
     for line in lines:
         m = pat.match(line)
@@ -756,6 +757,15 @@ def _split_single_line_if(code: str) -> str:
             kw = m.group(2)
             cond = cond_candidate
             body = m.group(4).rstrip(';').strip()
+            # If the body ends with an explicit block-closer (endforeach,
+            # endif, …) then it is already in "body; endX" form that
+            # _split_inline_blocks handles after foreach→for conversion.
+            # Don't wrap it in braces here.
+            # Note: bare 'end' is intentionally excluded; at this stage of the
+            # pipeline the PHP closer has not yet been normalised to 'end'.
+            if re.search(r'\b(endforeach|endif|endwhile|endfor)\s*$', body):
+                result.append(line)
+                continue
             result.append(f'{indent}{kw} ({cond}) {{')
             result.append(f'{indent}    {body};')
             result.append(f'{indent}}}')
