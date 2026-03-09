@@ -2068,7 +2068,7 @@ def _net_close_braces(s: str) -> int:
         c = s[i]
         if in_str:
             if c == '\\':
-                i += 2
+                i += 2  # skip escaped character; loop guard handles i >= len(s)
                 continue
             if c == in_str:
                 in_str = None
@@ -2079,7 +2079,9 @@ def _net_close_braces(s: str) -> int:
         elif c == '}':
             depth -= 1
         i += 1
-    return -depth  # positive when more } than {
+    # Positive return value → more } than { (net literal-brace closes on this line).
+    # Zero → balanced.  Negative → more { than } (net opens).
+    return -depth
 
 
 def _braces_to_indent(code: str) -> str:
