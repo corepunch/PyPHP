@@ -34,8 +34,23 @@ def _use_repl(m: re.Match) -> str:
 _re_var        = re.compile(r'\$([A-Za-z_]\w*)')
 _re_keywords   = re.compile(r'\b(true|false|null)\b')
 _kw_map        = {'true': 'True', 'false': 'False', 'null': 'None'}
-# Matches regular strings AND f-strings (so f"..." content is protected after interpolation)
-_re_string     = re.compile(r'f?"(?:[^"\\]|\\.)*"|f?\'(?:[^\'\\]|\\.)*\'')
+# Matches line comments, block comments, and string literals (including f-strings).
+# Comment patterns are listed FIRST so that an apostrophe/quote inside a comment is
+# consumed by the comment match rather than starting a false string span.
+#
+# Two comment flavours are included:
+#   //...  PHP/JS-style line comments (present before the // -> # step in php_to_python).
+#   #...   Python-style line comments (present after the // -> # step; also PHP's # variant).
+# Both must be recognised so that quotes inside comments never trigger false string spans
+# during any pass of _sub_outside_strings, regardless of whether the pass runs before or
+# after the // -> # conversion step.
+_re_string = re.compile(
+    r'//[^\n]*'              # // line comment (consumed to EOL; no newline included)
+    r'|#[^\n]*'              # #  line comment (PHP # or Python # after //→# conversion)
+    r'|/\*[\s\S]*?\*/'       # /* ... */ block comment (non-greedy, may span lines)
+    r'|f?"(?:[^"\\]|\\.)*"'  # double-quoted string or f-string
+    r"|f?'(?:[^'\\]|\\.)*'"  # single-quoted string or f-string
+)
 
 # Type-cast map: (int)$x -> int(__x), etc.
 _cast_py = {
@@ -136,7 +151,16 @@ def _sub_outside_strings(pattern, repl, code):
     result, pos = [], 0
     for m in _re_string.finditer(code):
         result.append(pattern.sub(repl, code[pos:m.start()]))
-        result.append(m.group())
+        text = m.group()
+        if text[:2] == '//':
+            # // comment: apply the pattern so that the // → # conversion step works.
+            # The comment is consumed, so quotes inside it won't start string spans.
+            result.append(pattern.sub(repl, text))
+        else:
+            # # comment, /* */ block comment, or string literal: preserve verbatim.
+            # Quotes inside comment spans are already consumed and won't confuse
+            # subsequent _re_string scans; string literal contents stay unchanged.
+            result.append(text)
         pos = m.end()
     result.append(pattern.sub(repl, code[pos:]))
     return ''.join(result)
@@ -152,8 +176,11 @@ def _sub_cast_outside_strings(pattern, repl, code):
     Matches whose start position falls inside a string literal are left unchanged.
     """
     # Collect (start, end) ranges for every string literal in the code.
+    # Exclude comment spans — _re_string matches comments to consume their quotes so
+    # those quotes never start fake string spans, but comments are not string literals.
     string_ranges: list[tuple[int, int]] = [
         (sm.start(), sm.end()) for sm in _re_string.finditer(code)
+        if sm.group()[:2] not in ('//', '/*') and not sm.group().startswith('#')
     ]
 
     def _in_string(pos: int) -> bool:
