@@ -2049,6 +2049,39 @@ def _split_stmts(s: str) -> list[str]:
     return parts
 
 
+def _net_close_braces(s: str) -> int:
+    """Count unmatched ``}`` characters outside string literals in *s*.
+
+    Returns a positive integer N when there are N more ``}`` than ``{`` outside
+    strings (i.e., the line contains N unmatched literal-brace closes).  Returns
+    0 when balanced, and a negative value when there are more ``{`` than ``}``.
+
+    Used by :func:`_braces_to_indent` to detect lines that close one or more
+    levels of a multi-line dict/set literal without starting with ``}``.
+    For example, ``'last_key': "val"},`` closes one literal level embedded at
+    the end of a content line.
+    """
+    depth = 0
+    in_str: str | None = None
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if in_str:
+            if c == '\\':
+                i += 2
+                continue
+            if c == in_str:
+                in_str = None
+        elif c in ('"', "'"):
+            in_str = c
+        elif c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+        i += 1
+    return -depth  # positive when more } than {
+
+
 def _braces_to_indent(code: str) -> str:
     """Convert PHP brace-delimited blocks to Python indentation.
 
@@ -2094,6 +2127,15 @@ def _braces_to_indent(code: str) -> str:
         # _tokens_to_python's else/elif transition already decrements the outer
         # indent before emitting, making the implicit close redundant.
         if stripped.startswith('}') and stripped not in ('}', '};'):
+            if lit_depth > 0:
+                # Closing a literal brace with trailing content (e.g. `},` for a
+                # dict entry).  Emit the brace + remainder unchanged, restore depth.
+                lit_depth -= 1
+                depth -= 1
+                if len(_class_stack) > 1:
+                    _class_stack.pop()
+                result.append(_BRACE_INDENT * depth + stripped)
+                continue
             if depth > 0:
                 depth -= 1
                 if len(_class_stack) > 1:
@@ -2106,6 +2148,9 @@ def _braces_to_indent(code: str) -> str:
                 # Closing a dict/set/other expression literal opened below —
                 # emit the brace unchanged and restore the literal-brace depth.
                 lit_depth -= 1
+                depth -= 1
+                if len(_class_stack) > 1:
+                    _class_stack.pop()
                 result.append(_BRACE_INDENT * depth + stripped)
             elif depth > 0:
                 depth -= 1
@@ -2165,10 +2210,13 @@ def _braces_to_indent(code: str) -> str:
             # decorator text) is handled correctly; guard against empty content.
             first_word = content.split(maxsplit=1)[0] if content else ''
             if first_word not in _BLOCK_OPENER_KEYWORDS:
-                # Dict/set/other literal opening brace — pass through and track
-                # depth so the matching } is also passed through unchanged.
+                # Dict/set/other literal opening brace — pass through, track
+                # lit_depth so the matching } is also emitted unchanged, and
+                # also increment depth so contents are indented correctly.
                 lit_depth += 1
                 result.append(_BRACE_INDENT * depth + stripped)
+                depth += 1
+                _class_stack.append(False)
                 continue
             is_class = content.startswith('class ')
             if not content.endswith(':'):
@@ -2214,6 +2262,22 @@ def _braces_to_indent(code: str) -> str:
             depth += 1
             _class_stack.append(False)
             continue
+
+        # When inside a literal brace block, detect lines that close one or more
+        # literal levels embedded at the end (e.g. `'last_key': "val"},` where
+        # `},` closes a nested dict opened on a previous line).  This arises when
+        # a multi-line PHP array's closing `]` shares the line with the last value.
+        if lit_depth > 0:
+            net_close = _net_close_braces(stripped)
+            if net_close > 0:
+                emit_at = depth
+                close_n = min(net_close, lit_depth)
+                lit_depth -= close_n
+                depth -= close_n
+                for _ in range(min(close_n, len(_class_stack) - 1)):
+                    _class_stack.pop()
+                result.append(_BRACE_INDENT * emit_at + stripped)
+                continue
 
         result.append(_BRACE_INDENT * depth + stripped)
 
