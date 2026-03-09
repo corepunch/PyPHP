@@ -983,48 +983,61 @@ def _split_single_line_if(code: str) -> str:
     """
     lines = code.split('\n')
     result: list = []
-    pat = re.compile(
-        r'^([ \t]*)(if|elseif|while|foreach)\s*\((.+)\)\s+([^{:].*)$'
-    )
+    _kw_re = re.compile(r'^([ \t]*)(if|elseif|while|foreach)\s*\(')
     for line in lines:
-        m = pat.match(line)
-        if m:
-            # Verify that the captured condition has balanced parentheses.
-            # The regex is greedy and may match an inner ')' rather than the
-            # outer one closing the 'if (...)', which would give an unbalanced
-            # condition like 'isset($x["h"]'.  Skip such false matches.
-            cond_candidate = m.group(3)
-            depth = 0
-            balanced = True
-            for ch in cond_candidate:
-                if ch == '(':
-                    depth += 1
-                elif ch == ')':
-                    depth -= 1
-                    if depth < 0:
-                        balanced = False
-                        break
-            if not balanced or depth != 0:
-                result.append(line)
-                continue
-            indent = m.group(1)
-            kw = m.group(2)
-            cond = cond_candidate
-            body = m.group(4).rstrip(';').strip()
-            # If the body ends with an explicit block-closer (endforeach,
-            # endif, …) then it is already in "body; endX" form that
-            # _split_inline_blocks handles after foreach→for conversion.
-            # Don't wrap it in braces here.
-            # Note: bare 'end' is intentionally excluded; at this stage of the
-            # pipeline the PHP closer has not yet been normalised to 'end'.
-            if re.search(r'\b(endforeach|endif|endwhile|endfor)\s*$', body):
-                result.append(line)
-                continue
-            result.append(f'{indent}{kw} ({cond}) {{')
-            result.append(f'{indent}    {body};')
-            result.append(f'{indent}}}')
-        else:
+        m = _kw_re.match(line)
+        if not m:
             result.append(line)
+            continue
+        indent = m.group(1)
+        kw = m.group(2)
+        # Character-level scan to find the balanced closing ')' of the condition.
+        open_pos = m.end() - 1  # position of the opening '('
+        depth = 1
+        in_string: str | None = None
+        i = open_pos + 1
+        while i < len(line) and depth > 0:
+            ch = line[i]
+            if in_string:
+                if ch == '\\':
+                    i += 1  # skip escaped char
+                elif ch == in_string:
+                    in_string = None
+            elif ch in ('"', "'"):
+                in_string = ch
+            elif ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            i += 1
+        if depth != 0:
+            # Unbalanced — leave unchanged
+            result.append(line)
+            continue
+        close_pos = i - 1  # position of the closing ')'
+        cond = line[open_pos + 1:close_pos]
+        after = line[close_pos + 1:].lstrip()
+        # Only split when there is a body that does not already start with '{'
+        # or ':' (the latter indicates an explicit colon-style block).
+        if not after or after[0] in ('{', ':'):
+            result.append(line)
+            continue
+        body = after.rstrip(';').strip()
+        if not body:
+            result.append(line)
+            continue
+        # If the body ends with an explicit block-closer (endforeach,
+        # endif, …) then it is already in "body; endX" form that
+        # _split_inline_blocks handles after foreach→for conversion.
+        # Don't wrap it in braces here.
+        # Note: bare 'end' is intentionally excluded; at this stage of the
+        # pipeline the PHP closer has not yet been normalised to 'end'.
+        if re.search(r'\b(endforeach|endif|endwhile|endfor)\s*$', body):
+            result.append(line)
+            continue
+        result.append(f'{indent}{kw} ({cond}) {{')
+        result.append(f'{indent}    {body};')
+        result.append(f'{indent}}}')
     return '\n'.join(result)
 
 

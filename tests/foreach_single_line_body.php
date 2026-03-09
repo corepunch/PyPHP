@@ -18,4 +18,24 @@ assert($out == 'abc');
 $seen = [];
 foreach ($parsers as $field => $type) array_push($seen, "$type $field");
 assert($seen == ['char* translation', 'float rotation', 'float scale']);
+
+// Single-line foreach where the condition contains a method call with parens.
+// Regression: the greedy regex used to match the wrong ')' and leave the
+// line unsplit, causing "echo" to appear as an undefined name at runtime.
+class TypeInfo {
+    private $container;
+    public function __construct($c) { $this->container = $c; }
+    public function getContainer() { return $this->container; }
+}
+class StructDef {
+    private $parsers;
+    public function __construct() {
+        $this->parsers = ['x' => new TypeInfo('int'), 'y' => new TypeInfo('float')];
+    }
+    public function getParsers() { return $this->parsers; }
+}
+$struct = new StructDef();
+$lines = [];
+foreach ($struct->getParsers() as $field => $type) array_push($lines, $type->getContainer() . " $field;");
+assert($lines == ['int x;', 'float y;']);
 ?>
