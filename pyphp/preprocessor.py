@@ -131,6 +131,107 @@ _re_spaceship = re.compile(r'<=>')
 # so that config::TypeInfos (no $) correctly fails while config::$TypeInfos works.
 _re_static_prop = re.compile(r'::\$(\w+)')
 
+# ── patterns hoisted from inline re.compile()/re.sub() calls ─────────────────
+# _rewrite_c_for_loops
+_re_c_for         = re.compile(r'^([ \t]*)for\s*\((.+)\)\s*(\{?)\s*$')
+_re_endfor        = re.compile(r'^\s*endfor\s*;?\s*$')
+# _rewrite_do_while
+_re_do            = re.compile(r'^([ \t]*)do\s*(\{?)[ \t]*$')
+_re_close_while   = re.compile(r'^[ \t]*\}\s*while\s*\((.+)\)\s*;?\s*$')
+# _normalize_match / _rewrite_match_expr
+_re_norm_match    = re.compile(r'^([ \t]*)(.+\bmatch\s*\(.+)\{[ \t]*$')
+_re_match_expr    = re.compile(r'\bmatch\s*\((.+?)\)\s*\{(.+)\}')
+# _rewrite_switch
+_re_switch        = re.compile(r'^([ \t]*)switch\s*\((.+)\)\s*(\{?)[ \t]*$')
+_re_case          = re.compile(r'^[ \t]*case\s+(.+?)\s*:[ \t]*$')
+_re_default_case  = re.compile(r'^[ \t]*default\s*:[ \t]*$')
+# _split_single_line_if
+_re_sli_kw        = re.compile(r'^([ \t]*)(if|elseif|while|foreach)\s*\(')
+# _expand_single_line_func_bodies
+_re_func_head     = re.compile(
+    r'^(?:(?:public|private|protected|static|abstract)\s+)*'
+    r'function\s+\w+\s*\(')
+# _strip_php_type_hints
+_re_return_type   = re.compile(r'\)\s*:\s*\??[\w]+(?:\s*\|\s*[\w]+)*\s*(?=\{)')
+_re_type_hint_pat = re.compile(r'(\??\b\w+(?:[ \t]*\|[ \t]*\w+)*)[ \t]+(\$[A-Za-z_]\w*)')
+# _strip_anonymous_use
+_re_anon_use      = re.compile(r'(function\s*\([^)]*\))\s+use\s*\([^)]*\)')
+# _rewrite_array_push_shorthand
+_re_arr_push      = re.compile(r'(?m)^(\s*)((?:self|__\w+)(?:\.\w+)*)\[\]\s*=\s*(.+?)\s*;?\s*$')
+# _rewrite_increment_decrement
+_re_post_inc_stmt = re.compile(r'(?m)^(\s*)(__\w+)\+\+\s*;?\s*$')
+_re_post_dec_stmt = re.compile(r'(?m)^(\s*)(__\w+)--\s*;?\s*$')
+_re_pre_inc_stmt  = re.compile(r'(?m)^(\s*)\+\+(__\w+)\s*;?\s*$')
+_re_pre_dec_stmt  = re.compile(r'(?m)^(\s*)--(__\w+)\s*;?\s*$')
+_re_post_inc_expr = re.compile(r'(__\w+)\+\+')
+_re_post_dec_expr = re.compile(r'(__\w+)--')
+_re_pre_inc_expr  = re.compile(r'\+\+(__\w+)')
+_re_pre_dec_expr  = re.compile(r'--(__\w+)')
+# _rewrite_heredoc
+_re_heredoc_open  = re.compile(r"^([ \t]*.*?)<<<(['\"]?)(\w+)\2[ \t]*$")
+# php_to_python
+_re_php_arrow     = re.compile(r'->')
+_re_list_assign   = re.compile(r'\blist\s*\(([^)]+)\)')
+_re_scope_res     = re.compile(r'::')
+_re_var_func_call = re.compile(
+    r'(?<![.\w])((?:def|function)\s+)?(__[A-Za-z][A-Za-z0-9_]*(?<!_))\(')
+_re_abstract_func = re.compile(r'\bfunction[ \t]+(\w+)[ \t]*\(([^)]*)\)[ \t]*;')
+_re_anon_assign   = re.compile(r'(?m)^(\s*)(__\w+)\s*=\s*function\s*\(([^)]*)\)')
+_re_construct     = re.compile(r'\bdef\s+__construct\b')
+_re_to_string     = re.compile(r'\bdef\s+__toString\b')
+_re_yield_kv      = re.compile(r'(?m)^([ \t]*yield\s+)(.+?)\s*=>\s*(.+)')
+_re_echo_stmt     = re.compile(r'^\s*echo\s*(.+?)[ \t]*;?[ \t]*$', re.MULTILINE)
+_re_trailing_semi = re.compile(r';\s*$')
+_re_require_stmt  = re.compile(
+    r'(?:require_once|include_once|require|include)\s+["\'](.+?)["\']\s*;?')
+# _c_for_inc_to_assign
+_re_inc_for       = re.compile(r'^(\$\w+)\+\+$|^\+\+(\$\w+)$')
+_re_dec_for       = re.compile(r'^(\$\w+)--$|^--(\$\w+)$')
+# _rewrite_catch
+_re_catch_brace   = re.compile(r'\}\s*catch\s*\(\s*(\w+)\s+\$(\w+)\s*\)\s*(\{|:)')
+_re_catch_bare    = re.compile(r'\bcatch\s*\(\s*(\w+)\s+\$(\w+)\s*\)\s*(\{|:)')
+_re_throw_new     = re.compile(r'\bthrow\s+new\b')
+_re_throw         = re.compile(r'\bthrow\b')
+# _rewrite_dynamic_props
+_re_dyn_assign    = re.compile(r'^(\s*)self\.\$(\w+)\s*=(?!=)\s*(.+)$')
+_re_dyn_read      = re.compile(r'self\.\$(\w+)')
+# _rewrite_define_const
+_re_define        = re.compile(r"\bdefine\s*\(\s*['\"](\w+)['\"]\s*,\s*(.+?)\s*\)\s*;?")
+_re_const_decl    = re.compile(r'(?m)^\s*const\s+([A-Z_][A-Z0-9_]*)\s*=')
+# php_to_python class / misc patterns
+_re_variadic      = re.compile(r'\.\.\.\$(\w+)')
+_re_abstract_cls  = re.compile(r'\babstract\s+(?=class\b)')
+_re_interface_kw  = re.compile(r'\binterface[^\S\n]+(\w+)')
+_re_whitespace    = re.compile(r'\s+')
+_re_cls_implements = re.compile(r'\bclass\s+(\w+)\s+implements\s+([\w,\s]+)')
+_re_prop_no_val   = re.compile(
+    r'^\s*(?:public|private|protected)\s+(?:static\s+)?\$\w+\s*;[ \t]*$',
+    re.MULTILINE)
+_re_prop_with_val = re.compile(
+    r'\b(?:public|private|protected)\s+(static\s+)?\$(\w+)\s*=')
+_re_static_method = re.compile(
+    r'^([ \t]*)(?:public|private|protected)\s+static\s+function\b',
+    re.MULTILINE)
+_re_access_func   = re.compile(r'\b(?:public|private|protected)\s+function\b')
+_re_abstract_func_kw = re.compile(
+    r'\babstract\s+(?:(?:public|private|protected)\s+)?function\b')
+_re_cls_after_impl = re.compile(r'(class\s+\w+\s*\([^)]*\))\s+implements\s+[\w,\s]+')
+_re_elseif        = re.compile(r'\belseif\b')
+_re_block_hdr     = re.compile(r'^(for|if|elif|while|with)\b(.+?)\s*:?$')
+_re_concat_expand = re.compile(r'(\$\w+)\s*\.=\s*')
+_re_echo_paren    = re.compile(r'^(\s*)echo\s*\((.+)\)\s*;?\s*$', re.MULTILINE)
+# _rewrite_ternary_line
+_re_tern_assign   = re.compile(r'(?<![=!<>])=(?!=)')
+_re_tern_kw       = re.compile(r'^(\s*(?:return|echo|print)\s+)(.*)')
+# _split_single_line_if / _braces_to_indent
+_re_end_body      = re.compile(r'\b(endforeach|endif|endwhile|endfor)\s*$')
+_re_brace_colon   = re.compile(r'\{\s*:$')
+# _heredoc_to_python / _php_string_interpolation (shared)
+_re_brace_interp  = re.compile(r'\{\$[^}]+\}')
+_re_var_interp    = re.compile(r'\$(\w+)')
+_re_var_sub_interp = re.compile(r'\$(\w+)(\[[^\]]*\])')
+_re_dq_string     = re.compile(r'"(?:[^"\\]|\\.)*"')
+
 
 def _inject_self_into_def(content: str) -> str:
     """Inject 'self' as first parameter into a def statement inside a class."""
@@ -499,11 +600,11 @@ def _split_c_for_parts(inner: str) -> list:
 def _c_for_inc_to_assign(s: str) -> str:
     """Convert $x++ / ++$x / $x-- / --$x to plain assignment form."""
     s = s.strip()
-    m = re.match(r'^(\$\w+)\+\+$|^\+\+(\$\w+)$', s)
+    m = _re_inc_for.match(s)
     if m:
         v = m.group(1) or m.group(2)
         return f'{v} = {v} + 1'
-    m = re.match(r'^(\$\w+)--$|^--(\$\w+)$', s)
+    m = _re_dec_for.match(s)
     if m:
         v = m.group(1) or m.group(2)
         return f'{v} = {v} - 1'
@@ -525,11 +626,9 @@ def _rewrite_c_for_loops(code: str) -> str:
     i = 0
     output: list = []
 
-    c_for_re = re.compile(r'^([ \t]*)for\s*\((.+)\)\s*(\{?)\s*$')
-
     while i < len(lines):
         line = lines[i]
-        m = c_for_re.match(line)
+        m = _re_c_for.match(line)
 
         if m:
             indent = m.group(1)
@@ -579,7 +678,7 @@ def _rewrite_c_for_loops(code: str) -> str:
                     # Collect body until endfor
                     while i < len(lines):
                         bl = lines[i].rstrip()
-                        if re.match(r'^\s*endfor\s*;?\s*$', bl):
+                        if _re_endfor.match(bl):
                             i += 1
                             break
                         output.append(lines[i])
@@ -613,12 +712,9 @@ def _rewrite_do_while(code: str) -> str:
     i = 0
     output: list = []
 
-    do_re = re.compile(r'^([ \t]*)do\s*(\{?)[ \t]*$')
-    close_while_re = re.compile(r'^[ \t]*\}\s*while\s*\((.+)\)\s*;?\s*$')
-
     while i < len(lines):
         line = lines[i]
-        m = do_re.match(line.rstrip())
+        m = _re_do.match(line.rstrip())
 
         if m:
             indent = m.group(1)
@@ -644,7 +740,7 @@ def _rewrite_do_while(code: str) -> str:
                         depth += 1
                     elif ch == '}':
                         depth -= 1
-                wm = close_while_re.match(bl)
+                wm = _re_close_while.match(bl)
                 if wm and depth == 0:
                     while_cond = wm.group(1).strip()
                     j += 1
@@ -686,9 +782,8 @@ def _normalize_match(code: str) -> str:
     lines = code.split('\n')
     output: list[str] = []
     i = 0
-    match_re = re.compile(r'^([ \t]*)(.+\bmatch\s*\(.+)\{[ \t]*$')
     while i < len(lines):
-        m = match_re.match(lines[i])
+        m = _re_norm_match.match(lines[i])
         if m:
             indent = m.group(1)
             accumulated = [m.group(2).rstrip() + ' {']
@@ -727,8 +822,6 @@ def _rewrite_match_expr(code: str) -> str:
     if 'match' not in code:
         return code
 
-    match_re = re.compile(r'\bmatch\s*\((.+?)\)\s*\{(.+)\}')
-
     def _convert_match(m: re.Match) -> str:
         subject = m.group(1).strip()
         body = m.group(2).strip()
@@ -764,7 +857,7 @@ def _rewrite_match_expr(code: str) -> str:
             expr = f'({value}) if {cond} else ({expr})'
         return f'(lambda _m_: {expr})({subject})'
 
-    return match_re.sub(_convert_match, code)
+    return _re_match_expr.sub(_convert_match, code)
 
 
 def _split_match_arms(body: str) -> list[str]:
@@ -870,13 +963,9 @@ def _rewrite_switch(code: str) -> str:
     output: list = []
     _sw_counter = [0]
 
-    switch_re = re.compile(r'^([ \t]*)switch\s*\((.+)\)\s*(\{?)[ \t]*$')
-    case_re = re.compile(r'^[ \t]*case\s+(.+?)\s*:[ \t]*$')
-    default_re = re.compile(r'^[ \t]*default\s*:[ \t]*$')
-
     while i < len(lines):
         line = lines[i]
-        m = switch_re.match(line.rstrip())
+        m = _re_switch.match(line.rstrip())
 
         if m:
             indent = m.group(1)
@@ -916,8 +1005,8 @@ def _rewrite_switch(code: str) -> str:
                         cases.append((current_vals[:], current_body[:]))
                     break
 
-                mc = case_re.match(bl)
-                md = default_re.match(bl)
+                mc = _re_case.match(bl)
+                md = _re_default_case.match(bl)
 
                 if mc:
                     val = mc.group(1).strip()
@@ -983,9 +1072,8 @@ def _split_single_line_if(code: str) -> str:
     """
     lines = code.split('\n')
     result: list = []
-    _kw_re = re.compile(r'^([ \t]*)(if|elseif|while|foreach)\s*\(')
     for line in lines:
-        m = _kw_re.match(line)
+        m = _re_sli_kw.match(line)
         if not m:
             result.append(line)
             continue
@@ -1032,7 +1120,7 @@ def _split_single_line_if(code: str) -> str:
         # Don't wrap it in braces here.
         # Note: bare 'end' is intentionally excluded; at this stage of the
         # pipeline the PHP closer has not yet been normalised to 'end'.
-        if re.search(r'\b(endforeach|endif|endwhile|endfor)\s*$', body):
+        if _re_end_body.search(body):
             result.append(line)
             continue
         result.append(f'{indent}{kw} ({cond}) {{')
@@ -1060,10 +1148,6 @@ def _expand_single_line_func_bodies(code: str) -> str:
     Both helpers are defined later in the module; Python resolves them at call
     time, not at definition time.
     """
-    _re_func_head = re.compile(
-        r'^(?:(?:public|private|protected|static|abstract)\s+)*'
-        r'function\s+\w+\s*\('
-    )
     result = []
     for line in code.splitlines():
         stripped = line.strip()
@@ -1207,22 +1291,19 @@ def _rewrite_catch(code: str) -> str:
     And:           throw $e                      ->  raise $e
     """
     # } catch (Type $var) { or } catch (Type $var):
-    code = re.sub(
-        r'\}\s*catch\s*\(\s*(\w+)\s+\$(\w+)\s*\)\s*(\{|:)',
+    code = _re_catch_brace.sub(
         lambda m: '} except ' + m.group(1) + ' as $' + m.group(2) + ' ' + m.group(3),
         code,
     )
     # catch without leading } (e.g. on own line after })
-    code = re.sub(
-        r'\bcatch\s*\(\s*(\w+)\s+\$(\w+)\s*\)\s*(\{|:)',
+    code = _re_catch_bare.sub(
         lambda m: 'except ' + m.group(1) + ' as $' + m.group(2) + ' ' + m.group(3),
         code,
     )
     # throw new ExceptionType(...) -> raise ExceptionType(...)
     # 'new' is removed by step 3, so: throw ExceptionType(...)
-    # But we need to handle both: process throw before step 3 removes 'new'
-    code = re.sub(r'\bthrow\s+new\b', 'raise', code)
-    code = re.sub(r'\bthrow\b', 'raise', code)
+    code = _re_throw_new.sub('raise', code)
+    code = _re_throw.sub('raise', code)
     return code
 
 
@@ -1259,11 +1340,7 @@ def _strip_php_type_hints(code: str) -> str:
     """
     # Strip return type annotations: ): type {  or  ): ?type {
     # Handles simple types, nullable (?type), and union types (type1|type2).
-    code = re.sub(
-        r'\)\s*:\s*\??[\w]+(?:\s*\|\s*[\w]+)*\s*(?=\{)',
-        ') ',
-        code,
-    )
+    code = _re_return_type.sub(') ', code)
     # Strip parameter type hints: [?]Type $var  →  $var
     # Uses a replacement function to skip PHP keywords that aren't type hints.
     # Uses _sub_outside_strings to avoid matching inside string literals.
@@ -1273,11 +1350,7 @@ def _strip_php_type_hints(code: str) -> str:
             return m.group(0)   # not a type hint — keep as-is
         return m.group(2)       # strip the type, keep the variable
 
-    code = _sub_outside_strings(
-        re.compile(r'(\??\b\w+(?:[ \t]*\|[ \t]*\w+)*)[ \t]+(\$[A-Za-z_]\w*)'),
-        _maybe_strip_type,
-        code,
-    )
+    code = _sub_outside_strings(_re_type_hint_pat, _maybe_strip_type, code)
     return code
 
 
@@ -1293,11 +1366,7 @@ def _strip_anonymous_use(code: str) -> str:
     ``nonlocal`` behaviour will typically work anyway since the closure is
     only *called* after the outer variable is assigned.
     """
-    return re.sub(
-        r'(function\s*\([^)]*\))\s+use\s*\([^)]*\)',
-        r'\1',
-        code,
-    )
+    return _re_anon_use.sub(r'\1', code)
 
 
 def _rewrite_dynamic_props(code: str) -> str:
@@ -1319,14 +1388,14 @@ def _rewrite_dynamic_props(code: str) -> str:
     result = []
     for line in code.splitlines():
         # Assignment: self.$k = EXPR  (but not == or ===)
-        m = re.match(r'^(\s*)self\.\$(\w+)\s*=(?!=)\s*(.+)$', line)
+        m = _re_dyn_assign.match(line)
         if m:
             indent, key, rhs = m.group(1), m.group(2), m.group(3)
             rhs = rhs.rstrip().rstrip(';').rstrip()
             result.append(f'{indent}setattr(self, ${key}, {rhs})')
         else:
             # Read: replace self.$k with getattr(self, $k)
-            line = re.sub(r'self\.\$(\w+)', r'getattr(self, $\1)', line)
+            line = _re_dyn_read.sub(r'getattr(self, $\1)', line)
             result.append(line)
     return '\n'.join(result)
 
@@ -1339,17 +1408,9 @@ def _rewrite_define_const(code: str) -> str:
     const NAME = value;    ->  NAME = value;
     """
     # define('CONST', value) or define("CONST", value)
-    code = re.sub(
-        r"\bdefine\s*\(\s*['\"](\w+)['\"]\s*,\s*(.+?)\s*\)\s*;?",
-        r'\1 = \2',
-        code,
-    )
+    code = _re_define.sub(r'\1 = \2', code)
     # const NAME = value;  (file-level or class-level constants)
-    code = re.sub(
-        r'(?m)^\s*const\s+([A-Z_][A-Z0-9_]*)\s*=',
-        r'\1 =',
-        code,
-    )
+    code = _re_const_decl.sub(r'\1 =', code)
     return code
 
 
@@ -1360,11 +1421,7 @@ def _rewrite_array_push_shorthand(code: str) -> str:
     so we match both simple variables (__varname[]) and property chains
     (self.prop[], __obj.prop[], self.a.b[]).
     """
-    return re.sub(
-        r'(?m)^(\s*)((?:self|__\w+)(?:\.\w+)*)\[\]\s*=\s*(.+?)\s*;?\s*$',
-        r'\1\2.append(\3)',
-        code,
-    )
+    return _re_arr_push.sub(r'\1\2.append(\3)', code)
 
 
 def _rewrite_increment_decrement(code: str) -> str:
@@ -1383,35 +1440,19 @@ def _rewrite_increment_decrement(code: str) -> str:
     --__x  ->  (__x := __x - 1)          # pre-decrement: returns new value
     """
     # Post-increment/decrement: __x++ or __x--;  at end of statement (standalone)
-    code = re.sub(r'(?m)^(\s*)(__\w+)\+\+\s*;?\s*$', r'\1\2 += 1', code)
-    code = re.sub(r'(?m)^(\s*)(__\w+)--\s*;?\s*$', r'\1\2 -= 1', code)
+    code = _re_post_inc_stmt.sub(r'\1\2 += 1', code)
+    code = _re_post_dec_stmt.sub(r'\1\2 -= 1', code)
     # Pre-increment/decrement: ++__x or --__x as a standalone statement
-    code = re.sub(r'(?m)^(\s*)\+\+(__\w+)\s*;?\s*$', r'\1\2 += 1', code)
-    code = re.sub(r'(?m)^(\s*)--(__\w+)\s*;?\s*$', r'\1\2 -= 1', code)
+    code = _re_pre_inc_stmt.sub(r'\1\2 += 1', code)
+    code = _re_pre_dec_stmt.sub(r'\1\2 -= 1', code)
     # Expression-context post-increment: __x++ -> ((__x := __x + 1) - 1)
-    # Returns the old value while incrementing __x as a side-effect.
-    def _post_inc(m: re.Match) -> str:
-        v = m.group(1)
-        return f'(({v} := {v} + 1) - 1)'
-    code = re.sub(r'(__\w+)\+\+', _post_inc, code)
+    code = _re_post_inc_expr.sub(lambda m: f'(({m.group(1)} := {m.group(1)} + 1) - 1)', code)
     # Expression-context post-decrement: __x-- -> ((__x := __x - 1) + 1)
-    # Returns the old value while decrementing __x as a side-effect.
-    def _post_dec(m: re.Match) -> str:
-        v = m.group(1)
-        return f'(({v} := {v} - 1) + 1)'
-    code = re.sub(r'(__\w+)--', _post_dec, code)
+    code = _re_post_dec_expr.sub(lambda m: f'(({m.group(1)} := {m.group(1)} - 1) + 1)', code)
     # Expression-context pre-increment: ++__x -> (__x := __x + 1)
-    # Increments __x and returns the new value.
-    def _pre_inc(m: re.Match) -> str:
-        v = m.group(1)
-        return f'({v} := {v} + 1)'
-    code = re.sub(r'\+\+(__\w+)', _pre_inc, code)
+    code = _re_pre_inc_expr.sub(lambda m: f'({m.group(1)} := {m.group(1)} + 1)', code)
     # Expression-context pre-decrement: --__x -> (__x := __x - 1)
-    # Decrements __x and returns the new value.
-    def _pre_dec(m: re.Match) -> str:
-        v = m.group(1)
-        return f'({v} := {v} - 1)'
-    code = re.sub(r'--(__\w+)', _pre_dec, code)
+    code = _re_pre_dec_expr.sub(lambda m: f'({m.group(1)} := {m.group(1)} - 1)', code)
     return code
 
 
@@ -1598,11 +1639,7 @@ def _rewrite_ternary(code: str) -> str:
     Processes lines individually; skips comment lines.
     Handles assignment context: __x = cond ? a : b  ->  __x = (a if cond else b)
     """
-    lines = code.split('\n')
-    result = []
-    for line in lines:
-        result.append(_rewrite_ternary_line(line))
-    return '\n'.join(result)
+    return '\n'.join(_rewrite_ternary_line(line) for line in code.split('\n'))
 
 
 def _rewrite_ternary_line(line: str) -> str:
@@ -1687,13 +1724,13 @@ def _rewrite_ternary_line(line: str) -> str:
     # Determine where the condition starts (after assignment operator).
     # The regex (?<![=!<>])=(?!=) matches a bare `=` while excluding compound
     # operators `==`, `!=`, `<=`, `>=` and the PHP strict-equality `===`.
-    assign_m = re.search(r'(?<![=!<>])=(?!=)', prefix)
+    assign_m = _re_tern_assign.search(prefix)
     if assign_m:
         assignment_part = prefix[:assign_m.end()]
         cond_expr = prefix[assign_m.end():].strip()
     else:
         # Check for 'return' / 'echo' prefix
-        kw_m = re.match(r'^(\s*(?:return|echo|print)\s+)(.*)', prefix)
+        kw_m = _re_tern_kw.match(prefix)
         if kw_m:
             assignment_part = kw_m.group(1)
             cond_expr = kw_m.group(2).strip()
@@ -2156,7 +2193,7 @@ def _braces_to_indent(code: str) -> str:
         # `foreach ($x as $v) {` step 1 already emits ':' and the '{' is left
         # trailing; step 2 then appends another ':', giving e.g. `for ... :{:`.
         # Strip the redundant ':' so the '{' is visible to the endswith('{') branch.
-        stripped = re.sub(r'\{\s*:$', '{', stripped)
+        stripped = _re_brace_colon.sub('{', stripped)
 
         # Track @staticmethod decorator so the following def skips self injection.
         if stripped == '@staticmethod':
@@ -2463,7 +2500,7 @@ def _heredoc_to_python(content: str, is_nowdoc: bool) -> str:
         saved.append(bm.group(0))
         return f'\x00{len(saved) - 1}\x00'
 
-    content = re.sub(r'\{\$[^}]+\}', _save_brace, content)
+    content = _re_brace_interp.sub(_save_brace, content)
 
     # Escape for f-string content (backslashes, quotes, newlines)
     content = _escape_double(content)
@@ -2475,14 +2512,14 @@ def _heredoc_to_python(content: str, is_nowdoc: bool) -> str:
     # {$var->prop} becomes {__var.prop} in the f-string.
     for idx, bv in enumerate(saved):
         expr = bv[1:-1]  # strip surrounding { }
-        expr = re.sub(r'\$(\w+)', r'__\1', expr)  # $var → __var
+        expr = _re_var_interp.sub(r'__\1', expr)   # $var → __var
         expr = expr.replace('->', '.')              # -> → .
         content = content.replace(f'\x00{idx}\x00', '{' + expr + '}')
 
     # $var[key] → {__var[key]}
-    content = re.sub(r'\$(\w+)(\[[^\]]*\])', r'{__\1\2}', content)
+    content = _re_var_sub_interp.sub(r'{__\1\2}', content)
     # $var → {__var}
-    content = re.sub(r'\$(\w+)', r'{__\1}', content)
+    content = _re_var_interp.sub(r'{__\1}', content)
 
     return f'f"{content}"'
 
@@ -2500,7 +2537,6 @@ def _rewrite_heredoc(code: str) -> str:
     if '<<<' not in code:
         return code
 
-    heredoc_re = re.compile(r"^([ \t]*.*?)<<<(['\"]?)(\w+)\2[ \t]*$")
     close_re_tmpl = r'^({label})[;,]?[ \t]*$'
 
     lines = code.split('\n')
@@ -2508,7 +2544,7 @@ def _rewrite_heredoc(code: str) -> str:
     i = 0
 
     while i < len(lines):
-        m = heredoc_re.match(lines[i])
+        m = _re_heredoc_open.match(lines[i])
         if not m:
             result.append(lines[i])
             i += 1
@@ -2568,7 +2604,7 @@ def _php_string_interpolation(code: str) -> str:
             saved.append(bm.group(0))
             return f'\x00{len(saved) - 1}\x00'
 
-        inner = re.sub(r'\{\$[^}]+\}', _save_brace, inner)
+        inner = _re_brace_interp.sub(_save_brace, inner)
 
         # Escape literal { and } for the f-string.
         inner = inner.replace('{', '{{').replace('}', '}}')
@@ -2578,19 +2614,19 @@ def _php_string_interpolation(code: str) -> str:
         # {$var->prop} becomes {__var.prop} in the f-string.
         for i, bv in enumerate(saved):
             expr = bv[1:-1]  # strip surrounding { }
-            expr = re.sub(r'\$(\w+)', r'__\1', expr)  # $var → __var
+            expr = _re_var_interp.sub(r'__\1', expr)   # $var → __var
             expr = expr.replace('->', '.')              # -> → .
             inner = inner.replace(f'\x00{i}\x00', '{' + expr + '}')
 
         # $var[key] -> {__var[key]}  (must come before bare $var)
-        inner = re.sub(r'\$(\w+)(\[[^\]]*\])', r'{__\1\2}', inner)
+        inner = _re_var_sub_interp.sub(r'{__\1\2}', inner)
         # $var -> {__var}
-        inner = re.sub(r'\$(\w+)', r'{__\1}', inner)
+        inner = _re_var_interp.sub(r'{__\1}', inner)
 
         return f'f"{inner}"'
 
     # Only act on double-quoted strings; single-quoted are returned verbatim.
-    return re.sub(r'"(?:[^"\\]|\\.)*"', _convert, code)
+    return _re_dq_string.sub(_convert, code)
 
 
 def _split_call_args(code: str) -> list[str]:
@@ -2986,37 +3022,28 @@ def php_to_python(code: str) -> str:
     #     '.' as a PHP string-concatenation operator; three consecutive dots would be
     #     consumed as three concat operators, silently removing the '...' prefix.
     #     Also handles typed variadics after type-hint stripping (e.g. int ...$x -> ...$x).
-    code = re.sub(r'\.\.\.\$(\w+)', r'*$\1', code)
+    code = _re_variadic.sub(r'*$\1', code)
     # 0a. Class syntax preprocessing (must run before foreach/$var/function steps).
     #     i. Remove 'abstract' from class declarations: abstract class Foo -> class Foo
-    code = re.sub(r'\babstract\s+(?=class\b)', '', code)
+    code = _re_abstract_cls.sub('', code)
     #     i2. interface Foo { ... }  ->  class Foo:  (Python has no interface enforcement)
     #         Use [^\S\n]+ (horizontal space only) instead of \s+ to avoid matching
     #         the word 'interface' at the end of a // comment and the class name on
     #         the following line.
-    code = re.sub(r'\binterface[^\S\n]+(\w+)', r'class \1', code)
+    code = _re_interface_kw.sub(r'class \1', code)
     #     i3. class Foo implements Bar, Baz -> class Foo(Bar, Baz) (before extends handling)
     #         class Foo extends Bar implements Baz -> class Foo(Bar, Baz) (combined)
     def _implements_repl(m: re.Match) -> str:
         name = m.group(1)
-        bases = re.sub(r'\s+', '', m.group(2))  # strip whitespace between names
+        bases = _re_whitespace.sub('', m.group(2))  # strip whitespace between names
         return f'class {name}({bases})'
     # class Foo implements Bar, Baz  (no extends)
-    code = re.sub(
-        r'\bclass\s+(\w+)\s+implements\s+([\w,\s]+)',
-        _implements_repl,
-        code,
-    )
+    code = _re_cls_implements.sub(_implements_repl, code)
     # Note: 'class Foo(Bar) implements Baz' is handled AFTER extends conversion (step vii2)
     #     ii. Remove no-value property declarations (with optional type annotation):
     #         public $name;      ->  (removed)
     #         private int $name; ->  (removed, type already stripped by step 0i)
-    code = re.sub(
-        r'^\s*(?:public|private|protected)\s+(?:static\s+)?\$\w+\s*;[ \t]*$',
-        '',
-        code,
-        flags=re.MULTILINE,
-    )
+    code = _re_prop_no_val.sub('', code)
     #     iii. Property declarations with values:
     #          public $name = val;        -> name = val;   (instance property)
     #          public static $name = val; -> _s_name = val; (static property, _s_ prefix)
@@ -3034,40 +3061,23 @@ def php_to_python(code: str) -> str:
         is_static = m.group(1) is not None
         name = m.group(2)
         return f'_s_{name} =' if is_static else f'{name} ='
-    code = re.sub(
-        r'\b(?:public|private|protected)\s+(static\s+)?\$(\w+)\s*=',
-        _class_prop_decl_repl,
-        code,
-    )
+    code = _re_prop_with_val.sub(_class_prop_decl_repl, code)
     #     iv. Static method declarations: public static function -> @staticmethod\nfunction
     #         Preserve the original leading whitespace so indentation survives.
-    code = re.sub(
-        r'^([ \t]*)(?:public|private|protected)\s+static\s+function\b',
-        r'\1@staticmethod\n\1function',
-        code,
-        flags=re.MULTILINE,
-    )
+    code = _re_static_method.sub(r'\1@staticmethod\n\1function', code)
     #     v. Access modifiers on methods: public/private/protected function -> function
-    code = re.sub(r'\b(?:public|private|protected)\s+function\b', 'function', code)
+    code = _re_access_func.sub('function', code)
     #     vi. Abstract methods: abstract [public] function -> function
-    code = re.sub(
-        r'\babstract\s+(?:(?:public|private|protected)\s+)?function\b',
-        'function',
-        code,
-    )
+    code = _re_abstract_func_kw.sub('function', code)
     #     vii. class Foo extends Bar -> class Foo(Bar)
     code = _re_class_extends.sub(r'class \1(\2)', code)
     #     vii2. Strip 'implements ...' that remains after extends conversion:
     #           class Foo(Bar) implements Baz -> class Foo(Bar)
     #           Must run AFTER vii so that 'class Foo extends Bar implements Baz'
     #           has already been converted to 'class Foo(Bar) implements Baz'.
-    code = re.sub(
-        r'(class\s+\w+\s*\([^)]*\))\s+implements\s+[\w,\s]+',
-        r'\1',
-        code,
-    )
+    code = _re_cls_after_impl.sub(r'\1', code)
     # 1. PHP elseif -> Python elif (before step 2 which normalises block headers)
-    code = re.sub(r'\belseif\b', 'elif', code)
+    code = _re_elseif.sub('elif', code)
     # 1b. Collapse multi-line foreach(...) expressions onto a single line so
     #     the foreach regexes (which use .+? without re.DOTALL) can match them.
     code = _normalize_foreach(code)
@@ -3088,7 +3098,7 @@ def php_to_python(code: str) -> str:
     #     consumed and won't be mistaken for an array element separator.
     code = _convert_php_arrays(code)
     # ensure for/if/while/with blocks always end with : even if omitted in source
-    code = re.sub(r'^(for|if|elif|while|with)\b(.+?)\s*:?$', r'\1\2:', code.strip())
+    code = _re_block_hdr.sub(r'\1\2:', code.strip())
     # 2. endif/endforeach/endwhile/endfor -> end
     code = _re_end.sub('end', code)
     # 2a. Split single-line inline blocks: "for ...: body; end" -> "for ...:\nbody"
@@ -3099,16 +3109,12 @@ def php_to_python(code: str) -> str:
     # 4. PHP concatenation assignment: expand $a .= $b to $a = $a . $b
     #    so _apply_php_concat can coerce both sides to str (PHP semantics).
     #    The simple substitution replaces '.= ' with '= var . ' in any position.
-    code = re.sub(
-        r'(\$\w+)\s*\.=\s*',
-        lambda m: f'{m.group(1)} = {m.group(1)} . ',
-        code,
-    )
+    code = _re_concat_expand.sub(lambda m: f'{m.group(1)} = {m.group(1)} . ', code)
     # 4a. Normalize echo(expr) -> echo expr so the concat step below can process it.
     #     In PHP, echo(expr) is echo applied to a parenthesised expression; the parens
     #     do not make it a function call.  We strip them here so _apply_php_concat sees
     #     the naked expression and can convert any . chains inside it.
-    code = re.sub(r'^(\s*)echo\s*\((.+)\)\s*;?\s*$', r'\1echo \2', code, flags=re.MULTILINE)
+    code = _re_echo_paren.sub(r'\1echo \2', code)
     # 4b. Expand single-line function bodies before concat so that concat operators
     #     inside the body are processed at the correct depth (not at depth 0 relative
     #     to the function header).
@@ -3137,7 +3143,7 @@ def php_to_python(code: str) -> str:
     #     also converted.  Must run before step 8 ($var -> __var) for the same reason.
     code = _rewrite_nullsafe(code)
     # 5. -> to .  outside strings
-    code = _sub_outside_strings(re.compile(r'->'), '.', code)
+    code = _sub_outside_strings(_re_php_arrow, '.', code)
     # 5a. Dynamic property access: $this->$k (now self.$k after steps 4d+5).
     #     self.$k still carries the PHP '$' prefix here, which makes it
     #     distinguishable from literal property names (self._element, etc.).
@@ -3166,11 +3172,7 @@ def php_to_python(code: str) -> str:
     # 8. $var -> __var  outside strings (protects XPath ".//field[@name]")
     code = _sub_outside_strings(_re_var, r'__\1', code)
     # 8a. list($a,$b) = ... -> __a, __b = ...  (list() wrapper stripped after var subst)
-    code = _sub_outside_strings(
-        re.compile(r'\blist\s*\(([^)]+)\)'),
-        lambda m: m.group(1),
-        code,
-    )
+    code = _sub_outside_strings(_re_list_assign, lambda m: m.group(1), code)
     # 8b. parent::method( -> super().method(  (handles __construct -> __init__ too)
     def _parent_repl(m: re.Match) -> str:
         method = '__init__' if m.group(1) == '__construct' else m.group(1)
@@ -3178,7 +3180,7 @@ def php_to_python(code: str) -> str:
     code = _sub_outside_strings(_re_parent_call, _parent_repl, code)
     # 8b2. :: (static method / property / class-constant access) -> .
     #      parent:: is already resolved above; remaining :: are ClassName::member.
-    code = _sub_outside_strings(re.compile(r'::'), '.', code)
+    code = _sub_outside_strings(_re_scope_res, '.', code)
     # 8b3. PHP variable functions: __var(args) -> _call_var(__var)(args)
     #      In PHP, a variable holding a function name can be called: $func($arg).
     #      After step 8 ($var -> __var), this becomes __func($arg), but Python
@@ -3187,20 +3189,14 @@ def php_to_python(code: str) -> str:
     #      name (function *definitions* must not be wrapped, only *calls*).
     #      Also skip Python dunder methods (names ending with '__').
     code = _sub_outside_strings(
-        re.compile(
-            r'(?<![.\w])((?:def|function)\s+)?(__[A-Za-z][A-Za-z0-9_]*(?<!_))\('
-        ),
+        _re_var_func_call,
         lambda m: m.group(0) if m.group(1) else f'_call_var({m.group(2)})(',
         code,
     )
     # 8c. PHP function declarations -> Python def (after $var->__var so params are __name)
     #     Abstract method stub: function foo(__a); -> function foo(__a) {}
     #     (interface/abstract class methods have no body, just a semicolon)
-    code = re.sub(
-        r'\bfunction[ \t]+(\w+)[ \t]*\(([^)]*)\)[ \t]*;',
-        r'function \1(\2) {}',
-        code,
-    )
+    code = _re_abstract_func.sub(r'function \1(\2) {}', code)
     #     Empty body: function foo(__a) {} -> def foo(__a): pass
     code = _sub_outside_strings(
         _re_func_empty,
@@ -3216,14 +3212,10 @@ def php_to_python(code: str) -> str:
     #     Anonymous functions assigned to a variable:
     #       __fn = function(__params) {  ->  def __fn(__params) {
     #     (runs after named-function rewrite so 'function' only matches anonymous forms)
-    code = re.sub(
-        r'(?m)^(\s*)(__\w+)\s*=\s*function\s*\(([^)]*)\)',
-        r'\1def \2(\3)',
-        code,
-    )
+    code = _re_anon_assign.sub(r'\1def \2(\3)', code)
     # 8d. Rename PHP magic methods to Python equivalents
-    code = re.sub(r'\bdef\s+__construct\b', 'def __init__', code)
-    code = re.sub(r'\bdef\s+__toString\b', 'def __str__', code)
+    code = _re_construct.sub('def __init__', code)
+    code = _re_to_string.sub('def __str__', code)
     # 8e. Null-coalescing operator: $a ?? $b  ->  _php_coalesce(lambda: __a, lambda: __b)
     #     Runs after step 8 ($var → __var) and after step 7 (// → #) so that lambdas
     #     capture __-prefixed names and PHP comment lines are already # comments.
@@ -3246,11 +3238,7 @@ def php_to_python(code: str) -> str:
     #     only bare `yield expr => expr` statements remain.  The key uses a
     #     non-greedy match and the value is greedy so it captures the rest of
     #     the line (including any trailing semicolon, which Python tolerates).
-    code = re.sub(
-        r'(?m)^([ \t]*yield\s+)(.+?)\s*=>\s*(.+)',
-        r'\1\2, \3',
-        code,
-    )
+    code = _re_yield_kv.sub(r'\1\2, \3', code)
     # 8i. Array push shorthand: __arr[] = val  ->  __arr.append(val)
     #     Must run after $var -> __var (step 8).
     code = _rewrite_array_push_shorthand(code)
@@ -3268,17 +3256,11 @@ def php_to_python(code: str) -> str:
     # 9. echo -> _out.write(str(a), str(b), …)  — works in all positions (MULTILINE)
     #    Supports comma-separated echo arguments:
     #      echo "hello", "world"  ->  _out.write(str("hello"), str("world"))
-    code = re.sub(
-        r'^\s*echo\s*(.+?)[ \t]*;?[ \t]*$',
-        _echo_repl,
-        code,
-        flags=re.MULTILINE,
-    )
+    code = _re_echo_stmt.sub(_echo_repl, code)
     # strip trailing PHP semicolons
-    code = re.sub(r';\s*$', '', code.strip())
+    code = _re_trailing_semi.sub('', code.strip())
     # 10. require/include/require_once/include_once -> _require(...)
-    code = re.sub(
-        r'(?:require_once|include_once|require|include)\s+["\'](.+?)["\']\s*;?',
+    code = _re_require_stmt.sub(
         lambda m: f'_require({_rewrite_require(m.group(1))!r})',
         code
     )

@@ -19,6 +19,9 @@ import types as _types
 
 from .simplexml import simplexml_load_string, simplexml_load_file
 
+# Cache for compiled PHP regex patterns (keyed by raw PHP pattern string).
+_php_re_cache: dict[str, tuple] = {}
+
 
 class _PHPException(Exception):
     """PHP-compatible Exception base class with getMessage(), getCode(), etc."""
@@ -839,29 +842,35 @@ def _make_php_builtins() -> dict:
     def _php_re(pattern):
         """Convert PHP regex /pattern/flags to (compiled_re, flags_int)."""
         pattern = str(pattern)
+        if pattern in _php_re_cache:
+            return _php_re_cache[pattern]
         if not pattern:
-            return re.compile(''), 0
-        delim = pattern[0]
-        if delim not in r'/#@~!':
-            # No delimiter — treat as raw Python pattern
-            return re.compile(pattern), 0
-        last = pattern.rfind(delim, 1)
-        if last <= 0:
-            core = pattern[1:]
-            flags_str = ''
+            result = re.compile(''), 0
         else:
-            core = pattern[1:last]
-            flags_str = pattern[last + 1:]
-        py_flags = 0
-        if 'i' in flags_str:
-            py_flags |= re.IGNORECASE
-        if 'm' in flags_str:
-            py_flags |= re.MULTILINE
-        if 's' in flags_str:
-            py_flags |= re.DOTALL
-        if 'x' in flags_str:
-            py_flags |= re.VERBOSE
-        return re.compile(core, py_flags), py_flags
+            delim = pattern[0]
+            if delim not in r'/#@~!':
+                # No delimiter — treat as raw Python pattern
+                result = re.compile(pattern), 0
+            else:
+                last = pattern.rfind(delim, 1)
+                if last <= 0:
+                    core = pattern[1:]
+                    flags_str = ''
+                else:
+                    core = pattern[1:last]
+                    flags_str = pattern[last + 1:]
+                py_flags = 0
+                if 'i' in flags_str:
+                    py_flags |= re.IGNORECASE
+                if 'm' in flags_str:
+                    py_flags |= re.MULTILINE
+                if 's' in flags_str:
+                    py_flags |= re.DOTALL
+                if 'x' in flags_str:
+                    py_flags |= re.VERBOSE
+                result = re.compile(core, py_flags), py_flags
+        _php_re_cache[pattern] = result
+        return result
 
     def _preg_match(pattern, subject, matches=None, flags=0, offset=0):
         """PHP preg_match: returns 1 on match, 0 otherwise; fills matches list."""
