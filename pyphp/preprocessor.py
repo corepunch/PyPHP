@@ -2196,6 +2196,11 @@ def _braces_to_indent(code: str) -> str:
                     _class_stack.pop()
                 result.append(_BRACE_INDENT * depth + stripped)
             elif depth > 0:
+                # If the block was empty (no statements were emitted since the
+                # header), insert 'pass' so the Python block is valid.
+                last_nonempty = next((r for r in reversed(result) if r.strip()), '')
+                if last_nonempty.rstrip().endswith(':'):
+                    result.append(_BRACE_INDENT * depth + 'pass')
                 depth -= 1
                 if len(_class_stack) > 1:
                     _class_stack.pop()
