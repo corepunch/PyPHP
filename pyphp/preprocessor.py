@@ -2449,28 +2449,30 @@ def _heredoc_to_python(content: str, is_nowdoc: bool) -> str:
     if '$' not in content:
         return f'"{_escape_double(content)}"'
 
-    # Save {$var} / {$var[key]} brace-delimited interpolations first
+    # Save {$var} / {$var[key]} / {$var->prop} brace-delimited interpolations
+    # first, so their braces aren't escaped in the next step.  The broad
+    # pattern r'\{\$[^}]+\}' captures all PHP curly-brace interpolation forms.
     saved: list[str] = []
 
     def _save_brace(bm: re.Match) -> str:
         saved.append(bm.group(0))
         return f'\x00{len(saved) - 1}\x00'
 
-    content = re.sub(r'\{\$(\w+)(?:\[[^\]]*\])?\}', _save_brace, content)
+    content = re.sub(r'\{\$[^}]+\}', _save_brace, content)
 
     # Escape for f-string content (backslashes, quotes, newlines)
     content = _escape_double(content)
     # Escape literal { and } (that are NOT from saved interpolations)
     content = content.replace('{', '{{').replace('}', '}}')
 
-    # Restore brace interpolations as Python f-string placeholders
+    # Restore brace interpolations as Python f-string placeholders.
+    # Strip outer { }, convert $var → __var and -> → . so that
+    # {$var->prop} becomes {__var.prop} in the f-string.
     for idx, bv in enumerate(saved):
-        py = re.sub(
-            r'\{\$(\w+)(\[[^\]]*\])?\}',
-            lambda bm: '{__' + bm.group(1) + (bm.group(2) or '') + '}',
-            bv,
-        )
-        content = content.replace(f'\x00{idx}\x00', py)
+        expr = bv[1:-1]  # strip surrounding { }
+        expr = re.sub(r'\$(\w+)', r'__\1', expr)  # $var → __var
+        expr = expr.replace('->', '.')              # -> → .
+        content = content.replace(f'\x00{idx}\x00', '{' + expr + '}')
 
     # $var[key] → {__var[key]}
     content = re.sub(r'\$(\w+)(\[[^\]]*\])', r'{__\1\2}', content)
@@ -2552,27 +2554,28 @@ def _php_string_interpolation(code: str) -> str:
         if '$' not in inner:
             return s  # nothing to interpolate
 
-        # Save {$var} / {$var[key]} brace-delimited interpolations first,
-        # so their braces aren't escaped in the next step.
+        # Save {$var} / {$var[key]} / {$var->prop} brace-delimited interpolations
+        # first, so their braces aren't escaped in the next step.  The broad
+        # pattern r'\{\$[^}]+\}' captures all PHP curly-brace interpolation forms.
         saved: list[str] = []
 
         def _save_brace(bm: re.Match) -> str:
             saved.append(bm.group(0))
             return f'\x00{len(saved) - 1}\x00'
 
-        inner = re.sub(r'\{\$(\w+)(?:\[[^\]]*\])?\}', _save_brace, inner)
+        inner = re.sub(r'\{\$[^}]+\}', _save_brace, inner)
 
         # Escape literal { and } for the f-string.
         inner = inner.replace('{', '{{').replace('}', '}}')
 
         # Restore brace interpolations as Python f-string placeholders.
+        # Strip outer { }, convert $var → __var and -> → . so that
+        # {$var->prop} becomes {__var.prop} in the f-string.
         for i, bv in enumerate(saved):
-            py = re.sub(
-                r'\{\$(\w+)(\[[^\]]*\])?\}',
-                lambda bm: '{__' + bm.group(1) + (bm.group(2) or '') + '}',
-                bv,
-            )
-            inner = inner.replace(f'\x00{i}\x00', py)
+            expr = bv[1:-1]  # strip surrounding { }
+            expr = re.sub(r'\$(\w+)', r'__\1', expr)  # $var → __var
+            expr = expr.replace('->', '.')              # -> → .
+            inner = inner.replace(f'\x00{i}\x00', '{' + expr + '}')
 
         # $var[key] -> {__var[key]}  (must come before bare $var)
         inner = re.sub(r'\$(\w+)(\[[^\]]*\])', r'{__\1\2}', inner)
