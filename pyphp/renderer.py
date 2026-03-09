@@ -278,6 +278,11 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
     # argv[0] is the template path (like PHP's argv[0] being the script)
     scope['argv'] = _sys.argv[1:]
     scope['__argv'] = _sys.argv[1:]
+    # PHP magic constants: __FILE__ and __DIR__
+    import os as _os_renderer
+    _abs_filename = _os_renderer.path.abspath(filename) if filename != '<template>' else filename
+    scope['__FILE__'] = _abs_filename
+    scope['__DIR__'] = _os_renderer.path.dirname(_abs_filename)
     for k, v in ctx.vars.items():
         scope[k] = v
         scope[f'__{k}'] = v
