@@ -182,3 +182,36 @@ $p1->translate(1, 1);
 assert($p1->x == 1);
 assert($p1->y == 1);
 ?>
+
+<?php
+// ── Empty class body and constructor-only subclass ────────────────────────────
+
+class BaseNode {
+    public $val;
+    public function __construct($v) { $this->val = $v; }
+    public function getVal() { return $this->val; }
+}
+
+// Constructor-only subclass — should not cause IndentationError
+class DerivedNode extends BaseNode {
+    function __construct($v) {
+        parent::__construct($v);
+    }
+}
+
+// Fully empty body — should produce 'pass' in generated Python
+class EmptyNode extends BaseNode {
+}
+
+// Empty function body — should produce 'pass' in generated Python
+function noop() {
+}
+
+$d = new DerivedNode(42);
+assert($d->getVal() == 42);
+
+$e = new EmptyNode(99);
+assert($e->getVal() == 99);
+
+noop();
+?>

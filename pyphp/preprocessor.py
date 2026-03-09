@@ -983,48 +983,61 @@ def _split_single_line_if(code: str) -> str:
     """
     lines = code.split('\n')
     result: list = []
-    pat = re.compile(
-        r'^([ \t]*)(if|elseif|while|foreach)\s*\((.+)\)\s+([^{:].*)$'
-    )
+    _kw_re = re.compile(r'^([ \t]*)(if|elseif|while|foreach)\s*\(')
     for line in lines:
-        m = pat.match(line)
-        if m:
-            # Verify that the captured condition has balanced parentheses.
-            # The regex is greedy and may match an inner ')' rather than the
-            # outer one closing the 'if (...)', which would give an unbalanced
-            # condition like 'isset($x["h"]'.  Skip such false matches.
-            cond_candidate = m.group(3)
-            depth = 0
-            balanced = True
-            for ch in cond_candidate:
-                if ch == '(':
-                    depth += 1
-                elif ch == ')':
-                    depth -= 1
-                    if depth < 0:
-                        balanced = False
-                        break
-            if not balanced or depth != 0:
-                result.append(line)
-                continue
-            indent = m.group(1)
-            kw = m.group(2)
-            cond = cond_candidate
-            body = m.group(4).rstrip(';').strip()
-            # If the body ends with an explicit block-closer (endforeach,
-            # endif, …) then it is already in "body; endX" form that
-            # _split_inline_blocks handles after foreach→for conversion.
-            # Don't wrap it in braces here.
-            # Note: bare 'end' is intentionally excluded; at this stage of the
-            # pipeline the PHP closer has not yet been normalised to 'end'.
-            if re.search(r'\b(endforeach|endif|endwhile|endfor)\s*$', body):
-                result.append(line)
-                continue
-            result.append(f'{indent}{kw} ({cond}) {{')
-            result.append(f'{indent}    {body};')
-            result.append(f'{indent}}}')
-        else:
+        m = _kw_re.match(line)
+        if not m:
             result.append(line)
+            continue
+        indent = m.group(1)
+        kw = m.group(2)
+        # Character-level scan to find the balanced closing ')' of the condition.
+        open_pos = m.end() - 1  # position of the opening '('
+        depth = 1
+        in_string: str | None = None
+        i = open_pos + 1
+        while i < len(line) and depth > 0:
+            ch = line[i]
+            if in_string:
+                if ch == '\\':
+                    i += 1  # skip escaped char
+                elif ch == in_string:
+                    in_string = None
+            elif ch in ('"', "'"):
+                in_string = ch
+            elif ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            i += 1
+        if depth != 0:
+            # Unbalanced — leave unchanged
+            result.append(line)
+            continue
+        close_pos = i - 1  # position of the closing ')'
+        cond = line[open_pos + 1:close_pos]
+        after = line[close_pos + 1:].lstrip()
+        # Only split when there is a body that does not already start with '{'
+        # or ':' (the latter indicates an explicit colon-style block).
+        if not after or after[0] in ('{', ':'):
+            result.append(line)
+            continue
+        body = after.rstrip(';').strip()
+        if not body:
+            result.append(line)
+            continue
+        # If the body ends with an explicit block-closer (endforeach,
+        # endif, …) then it is already in "body; endX" form that
+        # _split_inline_blocks handles after foreach→for conversion.
+        # Don't wrap it in braces here.
+        # Note: bare 'end' is intentionally excluded; at this stage of the
+        # pipeline the PHP closer has not yet been normalised to 'end'.
+        if re.search(r'\b(endforeach|endif|endwhile|endfor)\s*$', body):
+            result.append(line)
+            continue
+        result.append(f'{indent}{kw} ({cond}) {{')
+        result.append(f'{indent}    {body};')
+        result.append(f'{indent}}}')
     return '\n'.join(result)
 
 
@@ -2183,6 +2196,11 @@ def _braces_to_indent(code: str) -> str:
                     _class_stack.pop()
                 result.append(_BRACE_INDENT * depth + stripped)
             elif depth > 0:
+                # If the block was empty (no statements were emitted since the
+                # header), insert 'pass' so the Python block is valid.
+                last_nonempty = next((r for r in reversed(result) if r.strip()), '')
+                if last_nonempty.rstrip().endswith(':'):
+                    result.append(_BRACE_INDENT * depth + 'pass')
                 depth -= 1
                 if len(_class_stack) > 1:
                     _class_stack.pop()
@@ -2436,28 +2454,30 @@ def _heredoc_to_python(content: str, is_nowdoc: bool) -> str:
     if '$' not in content:
         return f'"{_escape_double(content)}"'
 
-    # Save {$var} / {$var[key]} brace-delimited interpolations first
+    # Save {$var} / {$var[key]} / {$var->prop} brace-delimited interpolations
+    # first, so their braces aren't escaped in the next step.  The broad
+    # pattern r'\{\$[^}]+\}' captures all PHP curly-brace interpolation forms.
     saved: list[str] = []
 
     def _save_brace(bm: re.Match) -> str:
         saved.append(bm.group(0))
         return f'\x00{len(saved) - 1}\x00'
 
-    content = re.sub(r'\{\$(\w+)(?:\[[^\]]*\])?\}', _save_brace, content)
+    content = re.sub(r'\{\$[^}]+\}', _save_brace, content)
 
     # Escape for f-string content (backslashes, quotes, newlines)
     content = _escape_double(content)
     # Escape literal { and } (that are NOT from saved interpolations)
     content = content.replace('{', '{{').replace('}', '}}')
 
-    # Restore brace interpolations as Python f-string placeholders
+    # Restore brace interpolations as Python f-string placeholders.
+    # Strip outer { }, convert $var → __var and -> → . so that
+    # {$var->prop} becomes {__var.prop} in the f-string.
     for idx, bv in enumerate(saved):
-        py = re.sub(
-            r'\{\$(\w+)(\[[^\]]*\])?\}',
-            lambda bm: '{__' + bm.group(1) + (bm.group(2) or '') + '}',
-            bv,
-        )
-        content = content.replace(f'\x00{idx}\x00', py)
+        expr = bv[1:-1]  # strip surrounding { }
+        expr = re.sub(r'\$(\w+)', r'__\1', expr)  # $var → __var
+        expr = expr.replace('->', '.')              # -> → .
+        content = content.replace(f'\x00{idx}\x00', '{' + expr + '}')
 
     # $var[key] → {__var[key]}
     content = re.sub(r'\$(\w+)(\[[^\]]*\])', r'{__\1\2}', content)
@@ -2539,27 +2559,28 @@ def _php_string_interpolation(code: str) -> str:
         if '$' not in inner:
             return s  # nothing to interpolate
 
-        # Save {$var} / {$var[key]} brace-delimited interpolations first,
-        # so their braces aren't escaped in the next step.
+        # Save {$var} / {$var[key]} / {$var->prop} brace-delimited interpolations
+        # first, so their braces aren't escaped in the next step.  The broad
+        # pattern r'\{\$[^}]+\}' captures all PHP curly-brace interpolation forms.
         saved: list[str] = []
 
         def _save_brace(bm: re.Match) -> str:
             saved.append(bm.group(0))
             return f'\x00{len(saved) - 1}\x00'
 
-        inner = re.sub(r'\{\$(\w+)(?:\[[^\]]*\])?\}', _save_brace, inner)
+        inner = re.sub(r'\{\$[^}]+\}', _save_brace, inner)
 
         # Escape literal { and } for the f-string.
         inner = inner.replace('{', '{{').replace('}', '}}')
 
         # Restore brace interpolations as Python f-string placeholders.
+        # Strip outer { }, convert $var → __var and -> → . so that
+        # {$var->prop} becomes {__var.prop} in the f-string.
         for i, bv in enumerate(saved):
-            py = re.sub(
-                r'\{\$(\w+)(\[[^\]]*\])?\}',
-                lambda bm: '{__' + bm.group(1) + (bm.group(2) or '') + '}',
-                bv,
-            )
-            inner = inner.replace(f'\x00{i}\x00', py)
+            expr = bv[1:-1]  # strip surrounding { }
+            expr = re.sub(r'\$(\w+)', r'__\1', expr)  # $var → __var
+            expr = expr.replace('->', '.')              # -> → .
+            inner = inner.replace(f'\x00{i}\x00', '{' + expr + '}')
 
         # $var[key] -> {__var[key]}  (must come before bare $var)
         inner = re.sub(r'\$(\w+)(\[[^\]]*\])', r'{__\1\2}', inner)

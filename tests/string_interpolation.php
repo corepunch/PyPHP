@@ -7,3 +7,15 @@
 <?php $x = 42; ?>
 <?php assert("x is {$x}" == "x is 42") ?>
 <?php assert('No $interpolation here' == 'No $interpolation here') ?>
+<?php
+// {$var->prop} interpolation — regression test: must produce property value,
+// not literal "{<object>->prop}".
+class Addr {
+    public $label;
+    public function __construct($l) { $this->label = $l; }
+}
+$field = new Addr("main");
+assert("self.{$field->label}" == "self.main");
+// Concat form should give the same result.
+assert("self.".$field->label == "self.main");
+?>
