@@ -1196,6 +1196,7 @@ _NON_TYPE_KEYWORDS = frozenset({
     'function', 'class', 'extends', 'implements', 'interface', 'trait',
     'global', 'local', 'readonly',
     'yield',     # generator yield statement
+    'from',      # yield from $generator (PHP 7+ generator delegation)
     'list',      # list($a, $b) = ...
     'break', 'continue', 'throw', 'raise',
 })
