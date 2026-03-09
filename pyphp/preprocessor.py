@@ -2877,6 +2877,10 @@ def _php_expr(expr: str) -> str:
     expr = expr.strip()
     expr = _re_new.sub(r'\1(', expr)
     expr = _re_this.sub('self', expr)   # $this → self before general $var → __var
+    # Static property: ClassName::$Prop → ClassName::_s_Prop  (must run BEFORE $var → __var
+    # to prevent Python name-mangling; e.g. config::$Axis inside class PropertyName would
+    # otherwise become config.__Axis → config._PropertyName__Axis after name-mangling.)
+    expr = _sub_outside_strings(_re_static_prop, r'::_s_\1', expr)
     expr = _re_var.sub(r'__\1', expr)
     return expr
 
