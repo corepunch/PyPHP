@@ -11,6 +11,7 @@ import inspect
 import itertools
 import math
 import json
+import os as _os
 import random
 import re
 import sys as _sys
@@ -1434,6 +1435,670 @@ def _make_php_builtins() -> dict:
                 raise ValueError(f'Unknown hashing algorithm: {algo!r}')
         return digest if raw_output else digest.hex()
 
+    # ── filesystem / path functions ──────────────────────────────────────────
+
+    def _dirname(path, levels=1):
+        path = str(path).rstrip('/')
+        # An empty input (or input that was only slashes) becomes '.' like PHP,
+        # but a root absolute path ('/' stripped to '') stays as '/'.
+        orig = str(path)
+        if not path:
+            path = '/' if orig.startswith('/') else '.'
+        for _ in range(int(levels)):
+            parent = _os.path.dirname(path)
+            path = parent if parent != '' else '.'
+        return path
+
+    def _basename(path, suffix=None):
+        b = _os.path.basename(str(path).rstrip('/'))
+        if suffix and b.endswith(str(suffix)):
+            b = b[: -len(str(suffix))]
+        return b
+
+    def _pathinfo(path, option=None):
+        path = str(path)
+        _PATHINFO_DIRNAME    = 1
+        _PATHINFO_BASENAME   = 2
+        _PATHINFO_EXTENSION  = 4
+        _PATHINFO_FILENAME   = 8
+        dn = _os.path.dirname(path)
+        bn = _os.path.basename(path)
+        root, ext = _os.path.splitext(bn)
+        info = {
+            'dirname':   dn,
+            'basename':  bn,
+            'extension': ext.lstrip('.') if ext else '',
+            'filename':  root,
+        }
+        if option == _PATHINFO_DIRNAME:    return info['dirname']
+        if option == _PATHINFO_BASENAME:   return info['basename']
+        if option == _PATHINFO_EXTENSION:  return info['extension']
+        if option == _PATHINFO_FILENAME:   return info['filename']
+        return info
+
+    def _realpath(path):
+        resolved = _os.path.realpath(str(path))
+        return resolved if _os.path.exists(resolved) else False
+
+    def _file_exists(path):           return _os.path.exists(str(path))
+    def _is_file(path):               return _os.path.isfile(str(path))
+    def _is_dir(path):                return _os.path.isdir(str(path))
+    def _is_readable(path):           return _os.access(str(path), _os.R_OK)
+    def _is_writable(path):           return _os.access(str(path), _os.W_OK)
+
+    def _file_get_contents(filename, use_include_path=False, context=None,
+                           offset=0, length=None):
+        try:
+            with open(str(filename), 'r', encoding='utf-8') as fh:
+                if offset:
+                    fh.seek(int(offset))
+                data = fh.read(int(length)) if length is not None else fh.read()
+            return data
+        except OSError:
+            return False
+
+    _FILE_USE_INCLUDE_PATH = 1
+    _FILE_IGNORE_NEW_LINES = 2
+    _FILE_SKIP_EMPTY_LINES = 4
+    _FILE_APPEND           = 8
+    _LOCK_EX               = 2
+
+    def _file_put_contents(filename, data, flags=0, context=None):
+        write_mode = 'a' if (int(flags) & _FILE_APPEND) else 'w'
+        try:
+            if isinstance(data, (list, PhpArray)):
+                content = ''.join(str(x) for x in data)
+            else:
+                content = str(data)
+            with open(str(filename), write_mode, encoding='utf-8') as fh:
+                fh.write(content)
+            return len(content.encode('utf-8'))
+        except OSError:
+            return False
+
+    def _file(filename, flags=0, context=None):
+        ignore_newlines  = bool(int(flags) & _FILE_IGNORE_NEW_LINES)
+        skip_empty       = bool(int(flags) & _FILE_SKIP_EMPTY_LINES)
+        try:
+            with open(str(filename), 'r', encoding='utf-8') as fh:
+                lines = fh.readlines()
+            if ignore_newlines:
+                lines = [l.rstrip('\n').rstrip('\r') for l in lines]
+            if skip_empty:
+                lines = [l for l in lines if l.strip() != '']
+            return lines
+        except OSError:
+            return False
+
+    def _scandir(directory, sorting_order=0):
+        import glob as _glob_mod
+        try:
+            entries = _os.listdir(str(directory))
+            entries = ['.', '..'] + sorted(entries)
+            if int(sorting_order) == 1:
+                entries = ['.', '..'] + sorted(_os.listdir(str(directory)), reverse=True)
+            return entries
+        except OSError:
+            return False
+
+    def _glob(pattern, flags=0):
+        import glob as _glob_mod
+        results = _glob_mod.glob(str(pattern), recursive=True)
+        return sorted(results) if results else []
+
+    def _mkdir(pathname, mode=0o777, recursive=False, context=None):
+        try:
+            _os.makedirs(str(pathname), mode=int(mode)) if recursive else \
+                _os.mkdir(str(pathname), mode=int(mode))
+            return True
+        except OSError:
+            return False
+
+    def _rmdir(dirname, context=None):
+        try:
+            _os.rmdir(str(dirname))
+            return True
+        except OSError:
+            return False
+
+    def _unlink(filename, context=None):
+        try:
+            _os.unlink(str(filename))
+            return True
+        except OSError:
+            return False
+
+    def _rename(oldname, newname, context=None):
+        try:
+            _os.rename(str(oldname), str(newname))
+            return True
+        except OSError:
+            return False
+
+    def _copy(source, dest, context=None):
+        import shutil
+        try:
+            shutil.copy2(str(source), str(dest))
+            return True
+        except OSError:
+            return False
+
+    def _sys_get_temp_dir():
+        import tempfile
+        return tempfile.gettempdir()
+
+    def _tempnam(dir=None, prefix='tmp'):
+        import tempfile
+        d = str(dir) if dir else tempfile.gettempdir()
+        fd, path = tempfile.mkstemp(prefix=str(prefix), dir=d)
+        _os.close(fd)
+        return path
+
+    def _getcwd():
+        return _os.getcwd()
+
+    def _chdir(directory):
+        try:
+            _os.chdir(str(directory))
+            return True
+        except OSError:
+            return False
+
+    def _filesize(filename):
+        try:
+            return _os.path.getsize(str(filename))
+        except OSError:
+            return False
+
+    def _filetype(filename):
+        try:
+            f = str(filename)
+            if _os.path.islink(f):   return 'link'
+            if _os.path.isfile(f):   return 'file'
+            if _os.path.isdir(f):    return 'dir'
+            return 'unknown'
+        except OSError:
+            return False
+
+    def _filemtime(filename):
+        try:
+            return int(_os.path.getmtime(str(filename)))
+        except OSError:
+            return False
+
+    def _touch(filename, mtime=None, atime=None):
+        import pathlib
+        try:
+            p = str(filename)
+            pathlib.Path(p).touch()
+            if mtime is not None:
+                t = int(mtime)
+                a = int(atime) if atime is not None else t
+                _os.utime(p, (a, t))
+            return True
+        except OSError:
+            return False
+
+    # ── additional string helpers ─────────────────────────────────────────────
+
+    def _str_ireplace(search, replace, subject, count=None):
+        if isinstance(search, list):
+            replaces = replace if isinstance(replace, list) else [replace] * len(search)
+            for s, r in zip(search, replaces):
+                pattern = re.compile(re.escape(str(s)), re.IGNORECASE)
+                subject = pattern.sub(str(r), str(subject))
+            return subject
+        pattern = re.compile(re.escape(str(search)), re.IGNORECASE)
+        return pattern.sub(str(replace), str(subject))
+
+    def _stripos(haystack, needle, offset=0):
+        h = str(haystack).lower()
+        n = str(needle).lower()
+        idx = h.find(n, int(offset))
+        return idx  # returns -1 (falsy) when not found, matching PHP false behaviour
+
+    def _strrpos_ci(haystack, needle, offset=0):
+        h = str(haystack).lower()
+        n = str(needle).lower()
+        return h.rfind(n, int(offset))
+
+    def _strstr(haystack, needle, before_needle=False):
+        h = str(haystack)
+        n = str(needle)
+        idx = h.find(n)
+        if idx == -1:
+            return False
+        return h[:idx] if before_needle else h[idx:]
+
+    def _stristr(haystack, needle, before_needle=False):
+        h = str(haystack)
+        n = str(needle)
+        idx = h.lower().find(n.lower())
+        if idx == -1:
+            return False
+        return h[:idx] if before_needle else h[idx:]
+
+    def _strrev(s):
+        return str(s)[::-1]
+
+    def _str_getcsv(string, separator=',', enclosure='"', escape='\\'):
+        import csv, io
+        reader = csv.reader(io.StringIO(str(string)),
+                            delimiter=str(separator),
+                            quotechar=str(enclosure))
+        return list(next(reader, []))
+
+    def _addslashes(s):
+        s = str(s)
+        return s.replace('\\', '\\\\').replace("'", "\\'").replace('"', '\\"').replace('\x00', '\\0')
+
+    def _stripslashes(s):
+        s = str(s)
+        result = []
+        i = 0
+        while i < len(s):
+            if s[i] == '\\' and i + 1 < len(s):
+                nxt = s[i + 1]
+                result.append({'n': '\n', 't': '\t', 'r': '\r', '\\': '\\',
+                                "'": "'", '"': '"', '0': '\x00'}.get(nxt, nxt))
+                i += 2
+            else:
+                result.append(s[i])
+                i += 1
+        return ''.join(result)
+
+    def _addcslashes(s, charlist):
+        result = []
+        chars = set(str(charlist))
+        for c in str(s):
+            result.append('\\' + c if c in chars else c)
+        return ''.join(result)
+
+    def _levenshtein(s1, s2):
+        s1, s2 = str(s1), str(s2)
+        m, n = len(s1), len(s2)
+        dp = list(range(n + 1))
+        for i in range(1, m + 1):
+            prev = dp[:]
+            dp[0] = i
+            for j in range(1, n + 1):
+                cost = 0 if s1[i - 1] == s2[j - 1] else 1
+                dp[j] = min(dp[j] + 1, dp[j - 1] + 1, prev[j - 1] + cost)
+        return dp[n]
+
+    def _similar_text(first, second, percent_ref=None):
+        import difflib
+        first, second = str(first), str(second)
+        m = difflib.SequenceMatcher(None, first, second)
+        common = sum(t.size for t in m.get_matching_blocks())
+        if percent_ref is not None:
+            total = len(first) + len(second)
+            percent_ref[0] = (2.0 * common / total * 100) if total else 0.0
+        return common
+
+    def _soundex(s):
+        s = re.sub(r'[^a-zA-Z]', '', str(s)).upper()
+        if not s:
+            return ''
+        _sdx_map = {
+            'B': '1', 'F': '1', 'P': '1', 'V': '1',
+            'C': '2', 'G': '2', 'J': '2', 'K': '2',
+            'Q': '2', 'S': '2', 'X': '2', 'Z': '2',
+            'D': '3', 'T': '3',
+            'L': '4',
+            'M': '5', 'N': '5',
+            'R': '6',
+        }
+        first = s[0]
+        result = first
+        prev = _sdx_map.get(first, '0')
+        for c in s[1:]:
+            code = _sdx_map.get(c, '0')
+            if code != '0' and code != prev:
+                result += code
+            prev = code
+            if len(result) == 4:
+                break
+        return (result + '0000')[:4]
+
+    def _metaphone(s):
+        """Basic English metaphone approximation."""
+        s = re.sub(r'[^a-zA-Z]', '', str(s)).upper()
+        if not s:
+            return ''
+        vowels = set('AEIOU')
+        result = []
+        i = 0
+        # Drop initial silent letters
+        if len(s) >= 2 and s[:2] in ('AE', 'GN', 'KN', 'PN', 'WR'):
+            i = 1
+        while i < len(s):
+            c = s[i]
+            if c in vowels and i == 0:
+                result.append(c)
+                i += 1
+                continue
+            if c in vowels:
+                i += 1
+                continue
+            if c == 'B':
+                if i == len(s) - 1 and i > 0 and s[i - 1] == 'M':
+                    i += 1
+                    continue
+                result.append('B')
+            elif c == 'C':
+                if i + 1 < len(s) and s[i + 1] in ('E', 'I', 'Y'):
+                    result.append('S')
+                elif i + 1 < len(s) and s[i + 1] == 'H':
+                    result.append('X')
+                    i += 1
+                else:
+                    result.append('K')
+            elif c == 'D':
+                if i + 2 < len(s) and s[i + 1] == 'G' and s[i + 2] in ('E', 'I', 'Y'):
+                    result.append('J')
+                    i += 1
+                else:
+                    result.append('T')
+            elif c == 'F':
+                result.append('F')
+            elif c == 'G':
+                if i + 1 < len(s) and s[i + 1] == 'H':
+                    i += 1
+                elif i + 1 < len(s) and s[i + 1] in ('E', 'I', 'Y'):
+                    result.append('J')
+                else:
+                    result.append('K')
+            elif c == 'H':
+                if i + 1 < len(s) and s[i + 1] in vowels:
+                    result.append('H')
+            elif c in ('J',):
+                result.append('J')
+            elif c == 'K':
+                if i == 0 or s[i - 1] != 'C':
+                    result.append('K')
+            elif c == 'L':
+                result.append('L')
+            elif c == 'M':
+                result.append('M')
+            elif c == 'N':
+                result.append('N')
+            elif c == 'P':
+                if i + 1 < len(s) and s[i + 1] == 'H':
+                    result.append('F')
+                    i += 1
+                else:
+                    result.append('P')
+            elif c == 'Q':
+                result.append('K')
+            elif c == 'R':
+                result.append('R')
+            elif c == 'S':
+                if i + 1 < len(s) and s[i + 1] == 'H':
+                    result.append('X')
+                    i += 1
+                elif i + 2 < len(s) and s[i + 1:i + 3] == 'IO':
+                    result.append('X')
+                elif i + 2 < len(s) and s[i + 1:i + 3] == 'IA':
+                    result.append('X')
+                else:
+                    result.append('S')
+            elif c == 'T':
+                if i + 1 < len(s) and s[i + 1] == 'H':
+                    result.append('0')
+                    i += 1
+                elif i + 2 < len(s) and s[i + 1:i + 3] in ('IA', 'IO'):
+                    result.append('X')
+                else:
+                    result.append('T')
+            elif c == 'V':
+                result.append('F')
+            elif c == 'W':
+                if i + 1 < len(s) and s[i + 1] in vowels:
+                    result.append('W')
+            elif c == 'X':
+                result.extend(['K', 'S'])
+            elif c == 'Y':
+                if i + 1 < len(s) and s[i + 1] in vowels:
+                    result.append('Y')
+            elif c == 'Z':
+                result.append('S')
+            i += 1
+        return ''.join(result)
+
+    def _quoted_printable_encode(s):
+        import quopri
+        return quopri.encodestring(str(s).encode('utf-8')).decode('ascii')
+
+    def _quoted_printable_decode(s):
+        import quopri
+        return quopri.decodestring(str(s).encode('ascii')).decode('utf-8', errors='replace')
+
+    def _number_format_locale(n, decimals=0, dec_point='.', thousands_sep=',',
+                              locale=None):
+        formatted = f'{n:,.{int(decimals)}f}'
+        if thousands_sep != ',' or dec_point != '.':
+            formatted = (formatted
+                         .replace(',', '\x00')
+                         .replace('.', dec_point)
+                         .replace('\x00', thousands_sep))
+        return formatted
+
+    def _sprintf_pad(s, width, pad_char=' ', align='right'):
+        s = str(s)
+        width = int(width)
+        if align == 'left':
+            return s.ljust(width, pad_char)
+        return s.rjust(width, pad_char)
+
+    # ── additional array helpers ──────────────────────────────────────────────
+
+    def _array_fill_keys(keys, value):
+        keys = _to_array(keys)
+        ks = list(keys.values()) if isinstance(keys, dict) else list(keys)
+        return {k: value for k in ks}
+
+    def _array_diff(array, *arrays):
+        array  = _to_array(array)
+        others = [set(_to_array(a).values() if isinstance(_to_array(a), dict)
+                      else _to_array(a))
+                  for a in arrays]
+        excl = set().union(*others)
+        if isinstance(array, dict):
+            return {k: v for k, v in array.items() if v not in excl}
+        return [v for v in array if v not in excl]
+
+    def _array_diff_key(array, *arrays):
+        array  = _to_array(array)
+        keys   = list(array.keys()) if isinstance(array, dict) else list(range(len(array)))
+        other_keys: set = set()
+        for a in arrays:
+            a = _to_array(a)
+            other_keys.update(a.keys() if isinstance(a, dict) else range(len(a)))
+        if isinstance(array, dict):
+            return {k: v for k, v in array.items() if k not in other_keys}
+        return [v for i, v in enumerate(array) if i not in other_keys]
+
+    def _array_intersect(array, *arrays):
+        array  = _to_array(array)
+        others = [set(_to_array(a).values() if isinstance(_to_array(a), dict)
+                      else _to_array(a))
+                  for a in arrays]
+        incl = set.intersection(*others) if others else set()
+        if isinstance(array, dict):
+            return {k: v for k, v in array.items() if v in incl}
+        return [v for v in array if v in incl]
+
+    def _array_intersect_key(array, *arrays):
+        array  = _to_array(array)
+        if not arrays:
+            return array
+        others = [set(_to_array(a).keys() if isinstance(_to_array(a), dict)
+                      else range(len(_to_array(a))))
+                  for a in arrays]
+        incl = set.intersection(*others)
+        if isinstance(array, dict):
+            return {k: v for k, v in array.items() if k in incl}
+        return [v for i, v in enumerate(array) if i in incl]
+
+    def _array_walk(arr_ref, callback, extra=None):
+        """Walk array in-place applying callback(value, key[, extra]).
+        Returns True like PHP."""
+        cb = _call_var(callback)
+        arr = arr_ref
+        if isinstance(arr, dict):
+            for k in list(arr.keys()):
+                if extra is not None:
+                    cb(arr[k], k, extra)
+                else:
+                    cb(arr[k], k)
+        else:
+            for i in range(len(arr)):
+                if extra is not None:
+                    cb(arr[i], i, extra)
+                else:
+                    cb(arr[i], i)
+        return True
+
+    # ── reflection / introspection ────────────────────────────────────────────
+
+    def _class_exists(class_name, autoload=True):
+        """Check if a class has been defined in the current Python builtins or
+        built-in PHP exception classes.  Full scope-aware lookup is not possible
+        here (the execution scope is not available); callers can always verify
+        via get_class()."""
+        import builtins as _bi
+        name = str(class_name)
+        return name in _bi.__dict__
+
+    def _get_class(obj=None):
+        if obj is None:
+            return False
+        return type(obj).__name__
+
+    def _get_parent_class(obj=None):
+        if obj is None:
+            return False
+        bases = type(obj).__bases__
+        if bases and bases[0] is not object:
+            return bases[0].__name__
+        return False
+
+    def _method_exists(obj_or_class, method_name):
+        cls = obj_or_class if isinstance(obj_or_class, type) else type(obj_or_class)
+        return hasattr(cls, str(method_name)) and callable(getattr(cls, str(method_name), None))
+
+    def _property_exists(obj_or_class, property_name):
+        prop = str(property_name)
+        if isinstance(obj_or_class, type):
+            return prop in obj_or_class.__dict__
+        # check instance dict first, then class dict (handles class-level attrs)
+        inst_dict = obj_or_class.__dict__ if hasattr(obj_or_class, '__dict__') else {}
+        return prop in inst_dict or prop in type(obj_or_class).__dict__
+
+    def _get_object_vars(obj):
+        if not hasattr(obj, '__dict__'):
+            return {}
+        # merge class-level + instance-level (instance overrides class)
+        result = {}
+        cls_dict = {k: v for k, v in type(obj).__dict__.items()
+                    if not k.startswith('_') and not callable(v)}
+        result.update(cls_dict)
+        result.update({k: v for k, v in obj.__dict__.items() if not k.startswith('_')})
+        return result
+
+    def _function_exists(name):
+        import builtins as _bi
+        return str(name) in _bi.__dict__ or callable(getattr(_bi, str(name), None))
+
+    def _is_a(obj, class_name, allow_string=False):
+        """PHP is_a() — checks object instance or class-name string."""
+        if isinstance(obj, type):
+            cls = obj
+        elif isinstance(obj, str):
+            if allow_string:
+                return obj == str(class_name)
+            return False
+        else:
+            cls = type(obj)
+        target = class_name if isinstance(class_name, type) else None
+        if target:
+            return issubclass(cls, target)
+        return cls.__name__ == str(class_name)
+
+    def _instanceof(obj, class_name):
+        """PHP instanceof operator helper."""
+        if isinstance(class_name, type):
+            return isinstance(obj, class_name)
+        return type(obj).__name__ == str(class_name)
+
+    # ── misc helpers ─────────────────────────────────────────────────────────
+
+    def _gettype(var):
+        if var is None:            return 'NULL'
+        if isinstance(var, bool):  return 'boolean'
+        if isinstance(var, int):   return 'integer'
+        if isinstance(var, float): return 'double'
+        if isinstance(var, str):   return 'string'
+        if isinstance(var, (list, dict)): return 'array'
+        return 'object'
+
+    def _settype(var, type_str):
+        """PHP settype — returns the cast value (cannot mutate caller variable)."""
+        t = str(type_str)
+        if t == 'int' or t == 'integer': return int(var)
+        if t == 'float' or t == 'double': return float(var)
+        if t == 'string': return str(var)
+        if t == 'bool' or t == 'boolean': return bool(var)
+        if t == 'array': return list(var) if isinstance(var, (list, dict)) else [var]
+        if t == 'null' or t == 'NULL': return None
+        return var
+
+    def _assert_php(expr, description=None):
+        if callable(expr):
+            result = expr()
+        else:
+            result = expr
+        if not result:
+            msg = str(description) if description else 'assert() failed'
+            raise AssertionError(msg)
+        return True
+
+    def _php_version_compare(v1, v2, operator=None):
+        def _parse(v):
+            import re as _re
+            parts = _re.split(r'[.\-]', str(v))
+            result = []
+            for p in parts:
+                try:
+                    result.append(int(p))
+                except ValueError:
+                    result.append(p)
+            return result
+        p1, p2 = _parse(v1), _parse(v2)
+        cmp = (p1 > p2) - (p1 < p2)
+        if operator is None:
+            return cmp
+        ops = {'<': cmp < 0, 'lt': cmp < 0,
+               '<=': cmp <= 0, 'le': cmp <= 0,
+               '>': cmp > 0, 'gt': cmp > 0,
+               '>=': cmp >= 0, 'ge': cmp >= 0,
+               '==': cmp == 0, '=': cmp == 0, 'eq': cmp == 0,
+               '!=': cmp != 0, '<>': cmp != 0, 'ne': cmp != 0}
+        return ops.get(str(operator), False)
+
+    def _php_uname(mode='a'):
+        import platform
+        m = str(mode)
+        if m == 's': return platform.system()
+        if m == 'n': return platform.node()
+        if m == 'r': return platform.release()
+        if m == 'v': return platform.version()
+        if m == 'm': return platform.machine()
+        return '{} {} {} {} {}'.format(platform.system(), platform.node(),
+                                       platform.release(), platform.version(),
+                                       platform.machine())
+
     def _compat(fn):
         """Wrap a callable so extra positional args beyond its declared signature
         are silently ignored.  PHP functions often accept optional args that our
@@ -1692,6 +2357,92 @@ def _make_php_builtins() -> dict:
         'call_user_func':      lambda fn, *args: _call_var(fn)(*args),
         'call_user_func_array': lambda fn, args: _call_var(fn)(*args),
         'is_callable':         callable,
+        # filesystem / path
+        'dirname':             _dirname,
+        'basename':            _basename,
+        'pathinfo':            _pathinfo,
+        'realpath':            _realpath,
+        'file_exists':         _file_exists,
+        'is_file':             _is_file,
+        'is_dir':              _is_dir,
+        'is_readable':         _is_readable,
+        'is_writable':         _is_writable,
+        'is_writeable':        _is_writable,
+        'file_get_contents':   _file_get_contents,
+        'file_put_contents':   _file_put_contents,
+        'file':                _file,
+        'scandir':             _scandir,
+        'glob':                _glob,
+        'mkdir':               _mkdir,
+        'rmdir':               _rmdir,
+        'unlink':              _unlink,
+        'rename':              _rename,
+        'copy':                _copy,
+        'sys_get_temp_dir':    _sys_get_temp_dir,
+        'tempnam':             _tempnam,
+        'getcwd':              _getcwd,
+        'chdir':               _chdir,
+        'filesize':            _filesize,
+        'filetype':            _filetype,
+        'filemtime':           _filemtime,
+        'touch':               _touch,
+        # additional string helpers
+        'str_ireplace':        _str_ireplace,
+        'stripos':             _stripos,
+        'strripos':            _strrpos_ci,
+        'strstr':              _strstr,
+        'stristr':             _stristr,
+        'strrev':              _strrev,
+        'str_getcsv':          _str_getcsv,
+        'addslashes':          _addslashes,
+        'stripslashes':        _stripslashes,
+        'addcslashes':         _addcslashes,
+        'levenshtein':         _levenshtein,
+        'similar_text':        _similar_text,
+        'soundex':             _soundex,
+        'metaphone':           _metaphone,
+        'quoted_printable_encode': _quoted_printable_encode,
+        'quoted_printable_decode': _quoted_printable_decode,
+        # additional array helpers
+        'array_fill_keys':     _array_fill_keys,
+        'array_diff':          _array_diff,
+        'array_diff_key':      _array_diff_key,
+        'array_intersect':     _array_intersect,
+        'array_intersect_key': _array_intersect_key,
+        'array_walk':          _array_walk,
+        # reflection / introspection
+        'class_exists':        _class_exists,
+        'get_class':           _get_class,
+        'get_parent_class':    _get_parent_class,
+        'method_exists':       _method_exists,
+        'property_exists':     _property_exists,
+        'get_object_vars':     _get_object_vars,
+        'function_exists':     _function_exists,
+        'is_a':                _is_a,
+        # misc
+        'gettype':             _gettype,
+        'settype':             _settype,
+        'version_compare':     _php_version_compare,
+        'php_uname':           _php_uname,
+        # filesystem constants
+        'FILE_USE_INCLUDE_PATH': _FILE_USE_INCLUDE_PATH,
+        'FILE_IGNORE_NEW_LINES': _FILE_IGNORE_NEW_LINES,
+        'FILE_SKIP_EMPTY_LINES': _FILE_SKIP_EMPTY_LINES,
+        'FILE_APPEND':           _FILE_APPEND,
+        'LOCK_EX':               _LOCK_EX,
+        'PATHINFO_DIRNAME':      1,
+        'PATHINFO_BASENAME':     2,
+        'PATHINFO_EXTENSION':    4,
+        'PATHINFO_FILENAME':     8,
+        'DIRECTORY_SEPARATOR':   _os.sep,
+        'PATH_SEPARATOR':        _os.pathsep,
+        'PHP_OS':                _sys.platform,
+        'PHP_OS_FAMILY':         ('Windows' if _sys.platform.startswith('win')
+                                  else ('Darwin' if _sys.platform == 'darwin' else 'Linux')),
+        'PHP_SAPI':              'cli',
+        'PHP_FLOAT_MAX':         1.7976931348623158e+308,
+        'PHP_FLOAT_MIN':         2.2250738585072014e-308,
+        'PHP_FLOAT_EPSILON':     2.2204460492503131e-16,
     }
     return {k: _compat(v) for k, v in _builtins.items()}
 
