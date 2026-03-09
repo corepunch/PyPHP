@@ -94,7 +94,33 @@ assert(Registry::$items["x"] == 10);
 assert(Registry::$items["y"] == 20);
 assert(Registry::$count == 3);
 
-// Correct: $-prefixed access works for writes
-Registry::$count = 99;
-assert(Registry::$count == 99);
+// ── ClassName::$Prop in foreach iterable inside a class body ─────────────
+// This is a subtle variant: the static property is used as the foreach iterable
+// expression, which goes through _php_expr(). Without the fix, _php_expr would
+// turn Config::$Axis into Config.__Axis → name-mangled to Config._NameFormatter__Axis.
+
+class Config {
+    public static $Axis = [
+        ["/x$/", "X"],
+        ["/y$/", "Y"],
+    ];
+}
+
+class NameFormatter {
+    public function format($name) {
+        foreach (Config::$Axis as $pair) {
+            $pat = $pair[0];
+            $repl = $pair[1];
+            if (preg_match($pat, $name)) {
+                return preg_replace($pat, $repl, $name);
+            }
+        }
+        return $name;
+    }
+}
+
+$fmt = new NameFormatter();
+assert($fmt->format("posx") == "posX");
+assert($fmt->format("posy") == "posY");
+assert($fmt->format("size") == "size");
 ?>

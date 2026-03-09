@@ -159,4 +159,35 @@ assert(implode(",", $sorted) == "16,9,4,1");
 // ── Generator expression: array_map chained with array_filter ─────────────
 $result2 = array_filter(array_map(fn($v) => $v * 2, squares(5)), fn($v) => $v > 10);
 assert(implode(",", $result2) == "18,32,50");
+
+// ── yield from with key-value generator delegation ────────────────────────
+function outer_kv() {
+    yield "prefix_a" => 1;
+    yield from pairs();
+}
+$out_kv = [];
+foreach (outer_kv() as $k => $v) {
+    array_push($out_kv, $k . "=" . $v);
+}
+assert(implode(",", $out_kv) == "prefix_a=1,x=10,y=20,z=30");
+
+// ── yield from inside a class method (the original issue) ─────────────────
+class Walker {
+    private function _walkItems($items) {
+        foreach ($items as $k => $v) {
+            yield $k => $v * 2;
+        }
+    }
+
+    function walk($items) {
+        yield from $this->_walkItems($items);
+    }
+}
+
+$walker = new Walker();
+$walked = [];
+foreach ($walker->walk(["a" => 1, "b" => 2]) as $key => $val) {
+    array_push($walked, $key . "=" . $val);
+}
+assert(implode(",", $walked) == "a=2,b=4");
 ?>
