@@ -19,7 +19,7 @@ test:
 
 examples:
 	@echo "=== C Header (examples/c_header/header.php) ==="
-	@$(PYTHON) -m pyphp $(EXAMPLES_DIR)/c_header/header.php --file=$(EXAMPLES_DIR)/c_header/model.xml
+	@$(PYTHON) -m pyphp $(EXAMPLES_DIR)/c_header/header.php $(EXAMPLES_DIR)/c_header/model.xml
 	@echo ""
 	@echo "=== HTML Report (examples/html/report.php) ==="
 	@$(PYTHON) -m pyphp $(EXAMPLES_DIR)/html/report.php

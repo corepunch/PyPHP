@@ -322,8 +322,11 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
                 src = fh.read()
             # Pure-PHP files commonly omit the closing "?>". The tokenizer
             # requires a closing tag to recognise the block; append a synthetic
-            # one so those files are compiled correctly.
-            if '<?php' in src and not src.rstrip().endswith('?>'):
+            # one so those files are compiled correctly.  Only do this when the
+            # file has no "?>" at all; mixed templates that already have
+            # closed <?php ... ?> blocks but end with non-PHP text must not
+            # receive a spurious closing tag in their output.
+            if '<?php' in src and '?>' not in src:
                 src = src.rstrip() + '\n?>'
             req_tokens = tokenize(src)
             script_src, req_map = _tokens_to_python(req_tokens)
@@ -402,8 +405,10 @@ def render_file(path: str | Path, ctx: Context, developer: bool = False) -> str:
     source = path.read_text(encoding='utf-8')
     # Pure-PHP files commonly omit the closing "?>". The tokenizer requires a
     # closing tag to recognise the block; append a synthetic one so those files
-    # are compiled correctly.  Mirror the same logic used in _require().
-    if '<?php' in source and not source.rstrip().endswith('?>'):
+    # are compiled correctly.  Only do this when the file has no "?>" at all;
+    # mixed templates that already have closed <?php ... ?> blocks but end with
+    # non-PHP text must not receive a spurious closing tag in their output.
+    if '<?php' in source and '?>' not in source:
         source = source.rstrip() + '\n?>'
     return render(source, ctx, filename=str(path), developer=developer)
 
