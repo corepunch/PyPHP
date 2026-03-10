@@ -136,6 +136,15 @@ for a complete feature-by-feature breakdown.
 
 ---
 
+## Contributing
+
+Interested in helping develop PyPHP?  See the
+[Contributing]({{ "/contributing" | relative_url }}) page for an overview of
+how the engine works, how to set up a development environment, and how to
+submit changes.
+
+---
+
 ## License
 
 MIT — see [LICENSE](https://github.com/corepunch/PyPHP/blob/main/LICENSE).
