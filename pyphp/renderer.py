@@ -17,6 +17,12 @@ from .preprocessor import php_to_python, _rewrite_require
 from .builtins import _PHP_BUILTINS, PhpArray, _call_var, _make_scope_call_var
 
 
+# ── module-level caches for performance ──────────────────────────────────────
+
+_TOKENIZE_CACHE: dict = {}         # (source, filename) -> list of tokens
+_COMPILED_SCRIPT_CACHE: dict = {}  # source -> (script, line_map)
+
+
 # ── PHP error ─────────────────────────────────────────────────────────────────
 
 class PHPError(Exception):
@@ -95,15 +101,23 @@ class Context:
 
     def make_eval(self, live_scope: dict):
         filters = self.filters
+        _eval_cache: dict[str, object] = {}  # cache for compiled code objects
+
         def _eval(expr: str) -> str:
             if '|' in expr:
                 expr_part, filter_name = expr.rsplit('|', 1)
-                value = eval(expr_part.strip(), live_scope)
+                expr_part = expr_part.strip()
+                if expr_part not in _eval_cache:
+                    _eval_cache[expr_part] = compile(expr_part, '<eval>', 'eval')
+                value = eval(_eval_cache[expr_part], live_scope)
                 fn = filters.get(filter_name.strip())
                 if fn is None:
                     raise NameError(f'Unknown filter: {filter_name.strip()!r}')
                 return str(fn(value))
-            return str(eval(expr.strip(), live_scope))
+            expr = expr.strip()
+            if expr not in _eval_cache:
+                _eval_cache[expr] = compile(expr, '<eval>', 'eval')
+            return str(eval(_eval_cache[expr], live_scope))
         return _eval
 
 
@@ -136,7 +150,10 @@ _TAG_PY       = re.compile(r'<\?py\s*(.*?)\s*\?>', re.DOTALL)
 _HTML_COMMENT = re.compile(r'<!--.*?-->', re.DOTALL)
 
 
-def tokenize(source: str) -> list:
+def tokenize(source: str, filename: str = '<template>') -> list:
+    cache_key = (source, filename)
+    if cache_key in _TOKENIZE_CACHE:
+        return _TOKENIZE_CACHE[cache_key]
     source = _HTML_COMMENT.sub('', source)
     tokens = []
     pos = 0
@@ -187,8 +204,8 @@ def tokenize(source: str) -> list:
             new_pos = next_tag.end()
             line_at_pos += source.count('\n', pos, new_pos)
             pos = new_pos
+    _TOKENIZE_CACHE[cache_key] = tokens
     return tokens
-
 
 # ── code generation ───────────────────────────────────────────────────────────
 
@@ -263,8 +280,12 @@ def _tokens_to_python(tokens: list) -> tuple[str, dict]:
 # ── renderer ──────────────────────────────────────────────────────────────────
 
 def render(source: str, ctx: Context, filename: str = '<template>', developer: bool = False) -> str:
-    tokens = tokenize(source)
-    script, line_map = _tokens_to_python(tokens)
+    # The compiled script and line_map are determined solely by the source text,
+    # not the filename, so source alone is the correct cache key.
+    if source not in _COMPILED_SCRIPT_CACHE:
+        tokens = tokenize(source, filename)
+        _COMPILED_SCRIPT_CACHE[source] = _tokens_to_python(tokens)
+    script, line_map = _COMPILED_SCRIPT_CACHE[source]
 
     scope = dict(ctx.vars)
     # PHP standard-library functions: expose as both plain name and __name in scope
@@ -333,8 +354,10 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
             # receive a spurious closing tag in their output.
             if '<?php' in src and '?>' not in src:
                 src = src.rstrip() + '\n?>'
-            req_tokens = tokenize(src)
-            script_src, req_map = _tokens_to_python(req_tokens)
+            if src not in _COMPILED_SCRIPT_CACHE:
+                req_tokens = tokenize(src, path)
+                _COMPILED_SCRIPT_CACHE[src] = _tokens_to_python(req_tokens)
+            script_src, req_map = _COMPILED_SCRIPT_CACHE[src]
             try:
                 exec(compile(script_src, path, 'exec'), scope)
             except PHPError:

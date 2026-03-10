@@ -8,6 +8,11 @@ PHP template code can be executed by the Python runtime.
 import re
 
 
+# ── module-level cache for performance ───────────────────────────────────────
+
+_PREPROCESS_CACHE: dict[str, str] = {}
+
+
 # ── php-to-python preprocessor ────────────────────────────────────────────────
 
 _re_foreach_kv = re.compile(r'foreach\s*\((.+?)\s+as\s+\$(\w+)\s*=>\s*\$(\w+)\s*\)[ \t]*:?')
@@ -2984,6 +2989,10 @@ def _rewrite_require(path: str) -> str:
 
 
 def php_to_python(code: str) -> str:
+    if code in _PREPROCESS_CACHE:
+        return _PREPROCESS_CACHE[code]
+    # Cache key uses the original input code before any transformations.
+    orig_code = code
     # -1. Heredoc/nowdoc strings: <<<EOT ... EOT -> Python triple-quoted (f-)strings.
     #     Must run before step 0 (string interpolation) so $vars inside heredoc
     #     content are converted to {__var} f-string placeholders before the
@@ -3289,4 +3298,5 @@ def php_to_python(code: str) -> str:
     #     in one <?php ?> tag).  Always applied so that multi-line blocks without
     #     explicit braces are also indented correctly.
     code = _braces_to_indent(code)
+    _PREPROCESS_CACHE[orig_code] = code
     return code

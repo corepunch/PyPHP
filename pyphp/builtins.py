@@ -2128,6 +2128,8 @@ def _make_php_builtins() -> dict:
 
         @functools.wraps(fn)
         def _safe(*args, **kwargs):
+            if len(args) <= max_pos:
+                return fn(*args, **kwargs)
             return fn(*args[:max_pos], **kwargs)
 
         return _safe
