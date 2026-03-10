@@ -7,7 +7,6 @@ Python callables, and the pre-built _PHP_BUILTINS singleton.
 """
 
 import functools
-import inspect
 import itertools
 import math
 import json
@@ -21,6 +20,9 @@ from .simplexml import simplexml_load_string, simplexml_load_file
 
 # Cache for compiled PHP regex patterns (keyed by raw PHP pattern string).
 _php_re_cache: dict[str, tuple] = {}
+
+# Python code-object flag: set when the function accepts *args.
+_CO_VARARGS = 0x04
 
 
 class _PHPException(Exception):
@@ -2117,18 +2119,12 @@ def _make_php_builtins() -> dict:
         unchanged."""
         if not callable(fn) or isinstance(fn, type):
             return fn
-        try:
-            sig = inspect.signature(fn)
-        except (ValueError, TypeError):
+        code = getattr(fn, '__code__', None)
+        if code is None:
             return fn
-        params = list(sig.parameters.values())
-        if any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params):
+        if code.co_flags & _CO_VARARGS:   # already accepts *args
             return fn
-        max_pos = sum(
-            1 for p in params
-            if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
-                          inspect.Parameter.POSITIONAL_OR_KEYWORD)
-        )
+        max_pos = code.co_argcount  # positional params (including those with defaults)
 
         @functools.wraps(fn)
         def _safe(*args, **kwargs):
