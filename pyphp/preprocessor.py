@@ -250,7 +250,9 @@ def _inject_self_into_def(content: str) -> str:
 
 def _sub_outside_strings(pattern, repl, code):
     result, pos = [], 0
+    any_span = False
     for m in _re_string.finditer(code):
+        any_span = True
         result.append(pattern.sub(repl, code[pos:m.start()]))
         text = m.group()
         if text[:2] == '//':
@@ -263,6 +265,9 @@ def _sub_outside_strings(pattern, repl, code):
             # subsequent _re_string scans; string literal contents stay unchanged.
             result.append(text)
         pos = m.end()
+    if not any_span:
+        # Fast-path: no string/comment spans — apply the pattern to the whole code block.
+        return pattern.sub(repl, code)
     result.append(pattern.sub(repl, code[pos:]))
     return ''.join(result)
 
@@ -2693,6 +2698,10 @@ def _apply_php_concat(code: str) -> str:
     **Pass 2** (outer level): processes depth-0 concat chains on the already-
     pre-processed code.
     """
+    # Fast-path: no dot at all means no concat operator and no float literal dot
+    # that could be mistaken for one — skip the full character-level scan.
+    if '.' not in code:
+        return code
     # ── Pass 1: recursively process concat inside function-call parentheses ───
     n = len(code)
     p1: list[str] = []
@@ -3127,23 +3136,30 @@ def php_to_python(code: str) -> str:
     #     the resulting dot-paths must not be present when _apply_php_concat runs)
     code = _re_use.sub(_use_repl, code)
     # 4d. $this -> self  (must run before -> to . so $this->prop becomes self.prop)
-    code = _sub_outside_strings(_re_this, 'self', code)
+    if '$this' in code:
+        code = _sub_outside_strings(_re_this, 'self', code)
     # 4e. PHP logical-NOT operator: !expr -> not expr  (outside strings)
     #     Must NOT match != (inequality); the negative lookahead (?!=) ensures this.
-    code = _sub_outside_strings(_re_not, 'not ', code)
+    if '!' in code:
+        code = _sub_outside_strings(_re_not, 'not ', code)
     # 4f. PHP strict equality/inequality: !== -> !=  and  === -> ==  (outside strings)
     #     !== must be replaced before === so the leading ! is not misread.
-    code = _sub_outside_strings(_re_strict_neq, '!=', code)
-    code = _sub_outside_strings(_re_strict_eq, '==', code)
+    if '!==' in code:
+        code = _sub_outside_strings(_re_strict_neq, '!=', code)
+    if '===' in code:
+        code = _sub_outside_strings(_re_strict_eq, '==', code)
     # 4g. PHP logical AND/OR: && -> and,  || -> or  (outside strings)
-    code = _sub_outside_strings(_re_logical_and, 'and', code)
-    code = _sub_outside_strings(_re_logical_or, 'or', code)
+    if '&&' in code:
+        code = _sub_outside_strings(_re_logical_and, 'and', code)
+    if '||' in code:
+        code = _sub_outside_strings(_re_logical_or, 'or', code)
     # 4h. PHP 8 null-safe operator: $obj?->member -> _php_nullsafe($obj, lambda _o: _o->member)
     #     Must run before step 5 (-> to .) so the -> inside the generated lambda is
     #     also converted.  Must run before step 8 ($var -> __var) for the same reason.
     code = _rewrite_nullsafe(code)
     # 5. -> to .  outside strings
-    code = _sub_outside_strings(_re_php_arrow, '.', code)
+    if '->' in code:
+        code = _sub_outside_strings(_re_php_arrow, '.', code)
     # 5a. Dynamic property access: $this->$k (now self.$k after steps 4d+5).
     #     self.$k still carries the PHP '$' prefix here, which makes it
     #     distinguishable from literal property names (self._element, etc.).
@@ -3155,7 +3171,8 @@ def php_to_python(code: str) -> str:
     # 6. true/false/null  outside strings
     code = _sub_outside_strings(_re_keywords, lambda m: _kw_map[m.group()], code)
     # 7. // comments -> #  (outside strings only)
-    code = _sub_outside_strings(_re_comment, r'#\1', code)
+    if '//' in code:
+        code = _sub_outside_strings(_re_comment, r'#\1', code)
     # 7a. Type casting: (int)$x -> int(__x) etc.
     #     Must run with $vars still present (before step 8) so the regex can capture names.
     #     Uses _sub_cast_outside_strings (not _sub_outside_strings) so the pattern can
@@ -3168,7 +3185,8 @@ def php_to_python(code: str) -> str:
     #     Foo would become config._Foo__TypeInfos).
     #     The _s_ prefix distinguishes static properties from class constants, so
     #     config::TypeInfos (no $) does NOT accidentally access the static property.
-    code = _sub_outside_strings(_re_static_prop, r'::_s_\1', code)
+    if '::$' in code:
+        code = _sub_outside_strings(_re_static_prop, r'::_s_\1', code)
     # 8. $var -> __var  outside strings (protects XPath ".//field[@name]")
     code = _sub_outside_strings(_re_var, r'__\1', code)
     # 8a. list($a,$b) = ... -> __a, __b = ...  (list() wrapper stripped after var subst)
@@ -3177,10 +3195,12 @@ def php_to_python(code: str) -> str:
     def _parent_repl(m: re.Match) -> str:
         method = '__init__' if m.group(1) == '__construct' else m.group(1)
         return f'super().{method}('
-    code = _sub_outside_strings(_re_parent_call, _parent_repl, code)
+    if 'parent::' in code:
+        code = _sub_outside_strings(_re_parent_call, _parent_repl, code)
     # 8b2. :: (static method / property / class-constant access) -> .
     #      parent:: is already resolved above; remaining :: are ClassName::member.
-    code = _sub_outside_strings(_re_scope_res, '.', code)
+    if '::' in code:
+        code = _sub_outside_strings(_re_scope_res, '.', code)
     # 8b3. PHP variable functions: __var(args) -> _call_var(__var)(args)
     #      In PHP, a variable holding a function name can be called: $func($arg).
     #      After step 8 ($var -> __var), this becomes __func($arg), but Python
