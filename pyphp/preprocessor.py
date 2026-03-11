@@ -1161,6 +1161,18 @@ def _split_single_line_if(code: str) -> str:
         # Only split when there is a body that does not already start with '{'
         # or ':' (the latter indicates an explicit colon-style block).
         if after and after[0] in ('{', ':'):
+            if after[0] == ':' and kw in ('if', 'while', 'foreach'):
+                # PHP colon-style block header with a body on the same line:
+                #   if ($cond): $ret = val;
+                # Split the body to the next line so _braces_to_indent correctly
+                # tracks the open block depth across multiple PHP template tags.
+                colon_body = after[1:].strip()
+                if colon_body and not _re_end_body.search(colon_body):
+                    body = colon_body.rstrip(';').strip()
+                    result.append(f'{indent}{kw} ({cond}):')
+                    result.append(f'{indent}    {body}')
+                    idx += 1
+                    continue
             result.append(line)
             idx += 1
             continue
@@ -2605,6 +2617,12 @@ def _braces_to_indent(code: str) -> str:
                 continue
 
         result.append(_BRACE_INDENT * depth + stripped)
+
+    # Append open-block markers for any unmatched colon-style block depth so that
+    # _tokens_to_python knows to increment indent for PHP colon-style blocks that
+    # span multiple <?php ?> template tags (e.g. `if ($cond): body; ?>...<?php else:`).
+    for _ in range(depth):
+        result.append('# __pyphp_open__')
 
     return '\n'.join(result)
 

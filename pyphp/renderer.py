@@ -211,6 +211,10 @@ def tokenize(source: str, filename: str = '<template>') -> list:
 
 _BLOCK_OPEN  = re.compile(r'^(for|if|elif|else|with|while|try|except|finally|def|class)\b.*:$')
 _BLOCK_CLOSE = re.compile(r'^(end|endforeach|endif|endwhile|endfor|endelse)$')
+# Sentinel appended by _braces_to_indent when a colon-style PHP block is left
+# open (not closed by a matching } or endX within the same PHP tag).  Each
+# occurrence means one indent level must be incremented in _tokens_to_python.
+_OPEN_MARKER = '\n# __pyphp_open__'
 
 
 def _tokens_to_python(tokens: list) -> tuple[str, dict]:
@@ -256,6 +260,15 @@ def _tokens_to_python(tokens: list) -> tuple[str, dict]:
             elif isinstance(token, (CodeToken, PyToken)):
                 code = token.code.strip()
                 php_base = token.php_line
+                # Strip open-block markers appended by _braces_to_indent for
+                # PHP colon-style blocks that span multiple template tags.
+                # For single-line block openers and transitions the existing
+                # branches already manage indent; open_depth is used only in
+                # the multi-line branch where no other logic handles it.
+                open_depth = 0
+                while code.endswith(_OPEN_MARKER):
+                    code = code[:-len(_OPEN_MARKER)]
+                    open_depth += 1
                 if _BLOCK_CLOSE.match(code):
                     indent = max(0, indent - 1)
                 elif code.startswith(('elif ', 'else', 'except', 'finally')):
@@ -267,9 +280,22 @@ def _tokens_to_python(tokens: list) -> tuple[str, dict]:
                     indent += 1
                 elif '\n' in code:
                     # Multi-line block: emit each sub-line with an incremented PHP line.
-                    # Preserve _braces_to_indent indentation by not stripping sub-lines.
-                    for offset, sub_line in enumerate(code.split('\n')):
-                        emit(sub_line, php_line=php_base + offset)
+                    if open_depth:
+                        # Colon-style open block: the sub-lines have _braces_to_indent
+                        # 4-space indentation that must be converted to tabs so subsequent
+                        # tokens at (indent + open_depth) are indented consistently.
+                        for offset, sub_line in enumerate(code.split('\n')):
+                            stripped_sl = sub_line.lstrip(' ')
+                            rel = (len(sub_line) - len(stripped_sl)) // 4
+                            py_lineno = len(lines) + 1
+                            if php_base is not None:
+                                line_map[py_lineno] = php_base + offset
+                            lines.append(tab * (indent + rel) + stripped_sl)
+                        indent += open_depth
+                    else:
+                        # Preserve _braces_to_indent indentation by not stripping sub-lines.
+                        for offset, sub_line in enumerate(code.split('\n')):
+                            emit(sub_line, php_line=php_base + offset)
                 else:
                     emit(code, php_line=php_base)
             i += 1
