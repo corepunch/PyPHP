@@ -22,6 +22,7 @@ PHP SimpleXML semantics reproduced here
   $xml->asXML()        serialise back to an XML string
 """
 
+import warnings
 import xml.etree.ElementTree as ET
 
 
@@ -35,16 +36,19 @@ class SimpleXMLElement:
     elements of the same tag both work without branching.
     """
 
-    def __init__(self, element: ET.Element) -> None:
+    def __init__(self, element: ET.Element,
+                 tree: ET.ElementTree = None) -> None:
         object.__setattr__(self, '_element', element)
+        object.__setattr__(self, '_tree', tree)
 
     # ── child-element access ──────────────────────────────────────────────────
 
     def __getattr__(self, name: str) -> 'SimpleXMLElementList':
         """Return all direct children whose tag equals *name*."""
         element = object.__getattribute__(self, '_element')
+        tree = object.__getattribute__(self, '_tree')
         return SimpleXMLElementList(
-            [SimpleXMLElement(c) for c in element if c.tag == name]
+            [SimpleXMLElement(c, tree) for c in element if c.tag == name]
         )
 
     # ── attribute / index access ──────────────────────────────────────────────
@@ -87,7 +91,8 @@ class SimpleXMLElement:
     def __iter__(self):
         """Iterate over direct children."""
         element = object.__getattribute__(self, '_element')
-        return (SimpleXMLElement(child) for child in element)
+        tree = object.__getattribute__(self, '_tree')
+        return (SimpleXMLElement(child, tree) for child in element)
 
     # ── PHP SimpleXML methods ─────────────────────────────────────────────────
 
@@ -103,12 +108,13 @@ class SimpleXMLElement:
         are included (matching PHP's ``children($ns, true)`` behaviour).
         """
         element = object.__getattribute__(self, '_element')
+        tree = object.__getattribute__(self, '_tree')
         if ns is not None:
             prefix = f'{{{ns}}}'
             return SimpleXMLElementList(
-                [SimpleXMLElement(c) for c in element if c.tag.startswith(prefix)]
+                [SimpleXMLElement(c, tree) for c in element if c.tag.startswith(prefix)]
             )
-        return SimpleXMLElementList([SimpleXMLElement(c) for c in element])
+        return SimpleXMLElementList([SimpleXMLElement(c, tree) for c in element])
 
     def attributes(self, ns: str = None) -> dict:
         """Return the element's attributes as a plain dict.
@@ -129,11 +135,25 @@ class SimpleXMLElement:
         """Evaluate an XPath expression and return matching elements.
 
         Uses :func:`xml.etree.ElementTree.Element.findall` which supports a
-        subset of XPath 1.0.
+        subset of XPath 1.0.  Absolute paths (starting with ``/``) are
+        evaluated against the document root via the stored
+        :class:`~xml.etree.ElementTree.ElementTree` — matching PHP's
+        behaviour where ``$el->xpath('//tag')`` always searches from the
+        document root regardless of which element the call is made on.
         """
         element = object.__getattribute__(self, '_element')
+        tree = object.__getattribute__(self, '_tree')
+        if path.startswith('/'):
+            # Absolute paths require an ElementTree, not just an Element.
+            # Fall back to wrapping the current element when no tree is stored.
+            searcher = tree if tree is not None else ET.ElementTree(element)
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', FutureWarning)
+                matches = searcher.findall(path)
+        else:
+            matches = element.findall(path)
         return SimpleXMLElementList(
-            [SimpleXMLElement(e) for e in element.findall(path)]
+            [SimpleXMLElement(e, tree) for e in matches]
         )
 
     def addChild(self, name: str, value: str = None) -> 'SimpleXMLElement':
@@ -142,10 +162,11 @@ class SimpleXMLElement:
         If *value* is given it is set as the element's text content.
         """
         element = object.__getattribute__(self, '_element')
+        tree = object.__getattribute__(self, '_tree')
         child = ET.SubElement(element, name)
         if value is not None:
             child.text = str(value)
-        return SimpleXMLElement(child)
+        return SimpleXMLElement(child, tree)
 
     def addAttribute(self, name: str, value: str) -> None:
         """Set (or add) an attribute on this element."""
@@ -212,7 +233,8 @@ def simplexml_load_string(xml_string: str) -> SimpleXMLElement:
     Mirrors PHP's ``simplexml_load_string()``.
     """
     element = ET.fromstring(xml_string)
-    return SimpleXMLElement(element)
+    tree = ET.ElementTree(element)
+    return SimpleXMLElement(element, tree)
 
 
 def simplexml_load_file(filename: str) -> SimpleXMLElement:
@@ -221,4 +243,4 @@ def simplexml_load_file(filename: str) -> SimpleXMLElement:
     Mirrors PHP's ``simplexml_load_file()``.
     """
     tree = ET.parse(filename)
-    return SimpleXMLElement(tree.getroot())
+    return SimpleXMLElement(tree.getroot(), tree)
