@@ -3646,8 +3646,12 @@ def php_to_python(code: str) -> str:
     # strip trailing PHP semicolons
     code = _re_trailing_semi.sub('', code.strip())
     # 10. require/include/require_once/include_once -> _require(...)
+    #     Always append '\n' so that when a require appears mid-line (e.g.
+    #     `require "f.php"; $x = new Foo();` in a single <?php ?> tag) the
+    #     _require() call is separated from the next statement; Python would
+    #     treat the adjacent tokens as a syntax error otherwise.
     code = _re_require_stmt.sub(
-        lambda m: f'_require({_rewrite_require(m.group(1))!r})',
+        lambda m: f'_require({_rewrite_require(m.group(1))!r})\n',
         code
     )
     # 11. Brace-to-indent: convert PHP { } blocks to Python indentation, and
