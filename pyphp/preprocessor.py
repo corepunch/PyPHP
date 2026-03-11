@@ -204,7 +204,7 @@ _re_yield_kv      = re.compile(r'(?m)^([ \t]*yield\s+)(.+?)\s*=>\s*(.+)')
 _re_echo_stmt     = re.compile(r'^\s*echo\s*(.+?)[ \t]*;?[ \t]*$', re.MULTILINE)
 _re_trailing_semi = re.compile(r';\s*$')
 _re_require_stmt  = re.compile(
-    r'(?:require_once|include_once|require|include)\s+["\'](.+?)["\']\s*;?')
+    r'(?:require_once|include_once|require|include)\s+(f?["\'](.+?)["\'])\s*;?')
 # _c_for_inc_to_assign
 _re_inc_for       = re.compile(r'^(\$\w+)\+\+$|^\+\+(\$\w+)$')
 _re_dec_for       = re.compile(r'^(\$\w+)--$|^--(\$\w+)$')
@@ -3669,7 +3669,7 @@ def php_to_python(code: str) -> str:
     #     _require() call is separated from the next statement; Python would
     #     treat the adjacent tokens as a syntax error otherwise.
     code = _re_require_stmt.sub(
-        lambda m: f'_require({_rewrite_require(m.group(1))!r})\n',
+        lambda m: f'_require({m.group(1)})\n',
         code
     )
     # 11. Brace-to-indent: convert PHP { } blocks to Python indentation, and
