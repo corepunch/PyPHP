@@ -45,6 +45,19 @@ assert(count($bs) == 2);
 assert(strval($bs[0]) == "hello");
 assert(strval($bs[1]) == "world");
 
+// ── absolute xpath from root (//tag) ─────────────────────────────────────
+$doc2 = simplexml_load_string('<root><a><b id="1">hello</b></a><a><b id="2">world</b></a></root>');
+$bs2 = $doc2->xpath('//b');
+assert(count($bs2) == 2);
+assert(strval($bs2[0]) == "hello");
+assert($bs2[0]['id'] == "1");
+assert(strval($bs2[1]) == "world");
+
+// xpath on a nested element still searches whole document for absolute paths
+$as = $doc2->a;
+$bs3 = $as->xpath('//b');
+assert(count($bs3) == 2);
+
 // ── addChild and addAttribute ─────────────────────────────────────────────
 $catalog = simplexml_load_string('<catalog/>');
 $book = $catalog->addChild('book', 'Learning PHP');
