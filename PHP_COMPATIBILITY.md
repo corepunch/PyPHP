@@ -440,7 +440,7 @@ assert(ord("Z") == 90);
 | `range()` | ✅ | Numeric and character ranges |
 | Array push shorthand | `$arr[] = val;` | ✅ | Converted to `.append()` |
 | `compact()` | ⚠️ | Frame inspection; use explicit dict in templates |
-| `extract()` | ❌ | Use explicit variable assignment |
+| `extract()` | ✅ | Injects array keys as variables into the current scope |
 
 ```php
 <?php
@@ -626,7 +626,7 @@ assert(date("H:i:s", $ts) == "12:00:00");
 | Interfaces | `interface Foo { }` | Use abstract classes |
 | Traits | `trait Foo { }` | Use class inheritance or mixins |
 | Named arguments | `foo(name: value)` | Use positional arguments |
-| `extract()` | `extract($arr)` | Assign variables explicitly |
+| `extract()` | `extract($arr)` | Now supported — injects array keys as `$variables` |
 | `list()` with keys | `list('k' => $v) = $arr` | Use `$v = $arr['k']` |
 | `heredoc` / `nowdoc` | `<<<EOT ... EOT` | Use multi-line strings |
 | `goto` | `goto label;` | Restructure code |
