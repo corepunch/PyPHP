@@ -1073,13 +1073,36 @@ def _make_php_builtins() -> dict:
     def _iterator_to_array(it, preserve_keys=True):
         """PHP iterator_to_array(): collect iterator into an array.
 
-        With ``preserve_keys=True`` (default) the iterator is expected to yield
-        ``(key, value)`` pairs and a dict is returned.  With ``preserve_keys=False``
-        a plain list of values is returned (keys discarded).
+        PHP generators can yield plain values (``yield $v``) or explicit
+        key-value pairs (``yield $k => $v``).  PyPHP transpiles the latter to
+        Python ``yield key, value`` tuples (step 8h), while plain yields
+        produce bare values.  Both forms are handled here.
+
+        With ``preserve_keys=True`` (default): key-value tuple yields are
+        stored under their key; plain-value yields receive auto-assigned
+        integer keys (0, 1, 2, …), matching PHP behaviour.  Returns a dict.
+
+        With ``preserve_keys=False``: values are collected into a plain list
+        (keys are discarded for key-value yields).
         """
         if preserve_keys:
-            return dict(it)
-        return [v for _, v in it]
+            result = {}
+            auto_key = 0
+            for item in it:
+                if isinstance(item, tuple) and len(item) == 2:
+                    k, v = item
+                    result[k] = v
+                else:
+                    result[auto_key] = item
+                    auto_key += 1
+            return result
+        result = []
+        for item in it:
+            if isinstance(item, tuple) and len(item) == 2:
+                result.append(item[1])
+            else:
+                result.append(item)
+        return result
 
     def _php_range(start, end=None, step=1):
         """PHP range(): generate array of values from start to end (inclusive).
