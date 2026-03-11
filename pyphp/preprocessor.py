@@ -95,7 +95,7 @@ _re_func_empty   = re.compile(r'\bfunction[ \t]+(\w+)[ \t]*\(([^)]*)\)[ \t]*\{[ 
 _re_func_keyword = re.compile(r'\bfunction[ \t]+(\w+)\b')
 
 # Statement keywords that prefix an expression (extracted before concat processing)
-_STMT_KEYWORDS = ('echo ', 'return ', 'print ')
+_STMT_KEYWORDS = ('echo ', 'return ', 'print ', 'yield ')
 
 # Pass-by-reference parameter prefix: &$param -> $param (outside strings)
 _re_byref_param = re.compile(r'&\$')
@@ -2597,12 +2597,15 @@ def _heredoc_to_python(content: str, is_nowdoc: bool) -> str:
     content = content.replace('{', '{{').replace('}', '}}')
 
     # Restore brace interpolations as Python f-string placeholders.
-    # Strip outer { }, convert $var → __var and -> → . so that
-    # {$var->prop} becomes {__var.prop} in the f-string.
+    # Strip outer { }, convert $var → __var, -> → ., and ?? →
+    # _php_coalesce(...) so that {$var->prop} becomes {__var.prop} and
+    # {$a ?? $b} becomes {_php_coalesce(lambda: __a, lambda: __b)}.
     for idx, bv in enumerate(saved):
         expr = bv[1:-1]  # strip surrounding { }
         expr = _re_var_interp.sub(r'__\1', expr)   # $var → __var
         expr = expr.replace('->', '.')              # -> → .
+        if '??' in expr:
+            expr = _rewrite_null_coalesce(expr)    # ?? → _php_coalesce(…)
         content = content.replace(f'\x00{idx}\x00', '{' + expr + '}')
 
     # $var[key] → {__var[key]}
@@ -2699,12 +2702,15 @@ def _php_string_interpolation(code: str) -> str:
         inner = inner.replace('{', '{{').replace('}', '}}')
 
         # Restore brace interpolations as Python f-string placeholders.
-        # Strip outer { }, convert $var → __var and -> → . so that
-        # {$var->prop} becomes {__var.prop} in the f-string.
+        # Strip outer { }, convert $var → __var, -> → ., and ?? →
+        # _php_coalesce(...) so that {$var->prop} becomes {__var.prop} and
+        # {$a ?? $b} becomes {_php_coalesce(lambda: __a, lambda: __b)}.
         for i, bv in enumerate(saved):
             expr = bv[1:-1]  # strip surrounding { }
             expr = _re_var_interp.sub(r'__\1', expr)   # $var → __var
             expr = expr.replace('->', '.')              # -> → .
+            if '??' in expr:
+                expr = _rewrite_null_coalesce(expr)    # ?? → _php_coalesce(…)
             inner = inner.replace(f'\x00{i}\x00', '{' + expr + '}')
 
         # $var[key] -> {__var[key]}  (must come before bare $var)
@@ -2912,8 +2918,8 @@ def _apply_php_concat(code: str) -> str:
         if not part.strip():
             return
         # If this is the first operand, extract any statement keyword (echo,
-        # return, print) or arrow-function header (fn(params) => ) as a prefix
-        # so that _cat() wraps only the pure expression body.
+        # return, print, yield) or arrow-function header (fn(params) => ) as a
+        # prefix so that _cat() wraps only the pure expression body.
         if not chain and not echo_prefix[0]:
             stripped = part.lstrip()
             for _kw in _STMT_KEYWORDS:
@@ -2922,12 +2928,26 @@ def _apply_php_concat(code: str) -> str:
                     part = stripped[len(_kw):]   # expression after keyword
                     break
             else:
-                # Check for arrow function prefix: fn(params) => body
-                _arrow_pfx = _extract_arrow_fn_prefix(stripped)
-                if _arrow_pfx is not None:
-                    leading_ws = part[:len(part) - len(stripped)]
-                    echo_prefix[0] = leading_ws + _arrow_pfx
-                    part = stripped[len(_arrow_pfx):]
+                # Also handle "<?php KEYWORD" / "<?= KEYWORD" so that an opening
+                # PHP tag does not hide the keyword from the detection above.
+                # e.g. "<?php yield expr" → echo_prefix "<?php yield ", part "expr"
+                for _tag in ('<?php ', '<?='):
+                    if stripped.startswith(_tag):
+                        after_tag = stripped[len(_tag):].lstrip()
+                        for _kw in _STMT_KEYWORDS:
+                            if after_tag.startswith(_kw):
+                                leading_ws = part[:len(part) - len(stripped)]
+                                echo_prefix[0] = leading_ws + stripped[:len(_tag)] + _kw
+                                part = after_tag[len(_kw):]
+                                break
+                        break
+                else:
+                    # Check for arrow function prefix: fn(params) => body
+                    _arrow_pfx = _extract_arrow_fn_prefix(stripped)
+                    if _arrow_pfx is not None:
+                        leading_ws = part[:len(part) - len(stripped)]
+                        echo_prefix[0] = leading_ws + _arrow_pfx
+                        part = stripped[len(_arrow_pfx):]
         chain.append(part)
 
     def flush_chain() -> None:
@@ -2940,6 +2960,28 @@ def _apply_php_concat(code: str) -> str:
         else:
             result.append(pfx + '_cat(' + ', '.join(p.strip() for p in chain) + ')')
         chain.clear()
+
+    def _is_yield_key_chain() -> bool:
+        """True when the active concat chain is building the key expression of a
+        ``yield KEY => VALUE`` statement.
+
+        Handles both the bare ``yield EXPR`` form (where ``flush_current`` has
+        already set ``echo_prefix[0]`` to ``'yield '``) and the ``<?php yield
+        EXPR`` form (where the PHP opening tag prevents keyword detection, so
+        ``echo_prefix[0]`` is empty and the tag+keyword sit in ``chain[0]``).
+        """
+        # Bare case: flush_current() already extracted "yield " as the prefix.
+        if echo_prefix[0].split()[-1:] == ['yield']:
+            return True
+        # Tagged case: "<?php yield …" — inspect the first chain element.
+        if chain:
+            first = chain[0].lstrip()
+            if first.startswith('<?php '):
+                first = first[6:].lstrip()
+            elif first.startswith('<?='):
+                first = first[3:].lstrip()
+            return first.startswith('yield ') or first == 'yield'
+        return False
 
     while i < n:
         ch = code[i]
@@ -2988,6 +3030,16 @@ def _apply_php_concat(code: str) -> str:
             prev_ch = code[i - 1] if i > 0 else ''
             next_ch = code[i + 1] if i + 1 < n else ''
             if prev_ch in '!<>=.+-*/' or next_ch in '=>':
+                # If this '=>' is the key→value separator of a yield statement
+                # (e.g. `yield $a.".".$b => $val`) and we are mid-chain, flush
+                # the concat chain for the key and emit '=>' as a boundary so
+                # the value is not swallowed into the last concat operand.
+                if next_ch == '>' and chain and _is_yield_key_chain():
+                    flush_current()
+                    flush_chain()
+                    result.append('=>')
+                    i += 2  # skip past '=' and '>'
+                    continue
                 current.append(ch)   # compound operator (==, !=, <=, =>, +=, …)
             else:
                 # plain assignment: LHS is not part of a concat chain
