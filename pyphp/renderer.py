@@ -408,6 +408,38 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
 
     scope['_require'] = _require
 
+    # PHP extract(): import variables from an array into the current scope.
+    # Variables with string keys are injected as __key into the exec scope so
+    # that subsequent PHP code (including require-d files) can access them as $key.
+    _EXTR_OVERWRITE      = 0
+    _EXTR_SKIP           = 1
+    _EXTR_PREFIX_SAME    = 2
+    _EXTR_PREFIX_ALL     = 3
+    _EXTR_PREFIX_INVALID = 4
+    _EXTR_IF_EXISTS      = 6
+    _EXTR_PREFIX_IF_EXISTS = 7
+
+    def _extract(arr, flags=_EXTR_OVERWRITE, prefix=''):
+        if not isinstance(arr, (dict, PhpArray)):
+            return 0
+        count = 0
+        for k, v in arr.items():
+            if not isinstance(k, str):
+                continue
+            py_name = f'__{k}'
+            if flags == _EXTR_SKIP and py_name in scope:
+                continue
+            if flags in (_EXTR_PREFIX_SAME, _EXTR_PREFIX_IF_EXISTS) and py_name in scope:
+                py_name = f'__{prefix}_{k}' if prefix else f'__{k}'
+            elif flags == _EXTR_PREFIX_ALL:
+                py_name = f'__{prefix}_{k}' if prefix else f'__{k}'
+            scope[py_name] = v
+            count += 1
+        return count
+
+    scope['extract']   = _extract
+    scope['__extract'] = _extract
+
     # PHP exit() / die(): flush the output buffer to stdout *before* terminating.
     # Without this wrapper, SystemExit propagates up and the _OutWriter buffer is
     # discarded, causing all output before exit() to be silently lost.
