@@ -163,6 +163,11 @@ _re_case          = re.compile(r'^[ \t]*case\s+(.+?)\s*:[ \t]*$')
 _re_default_case  = re.compile(r'^[ \t]*default\s*:[ \t]*$')
 # _split_single_line_if
 _re_sli_kw        = re.compile(r'^([ \t]*)(if|elseif|while|foreach)\s*\(')
+# Keywords that precede an array literal (not subscript access).
+# e.g.  return ['a' => 1]  →  return {'a': 1}  (not return[…])
+_ARRAY_CONTEXT_KEYWORDS = frozenset({
+    'return', 'echo', 'print', 'yield', 'throw', 'new',
+})
 # _expand_single_line_func_bodies
 _re_func_head     = re.compile(
     r'^(?:(?:public|private|protected|static|abstract)\s+)*'
@@ -460,13 +465,29 @@ def _convert_php_arrays(code: str) -> str:
 
         A '[' is a subscript (not an array literal) when the immediately preceding
         non-whitespace character in the output is an alphanumeric, ``_``, ``)``,
-        ``]``, ``"`` or ``'`` — i.e. it follows an expression.
+        ``]``, ``"`` or ``'`` — i.e. it follows an expression, but NOT a keyword
+        such as ``return``, ``echo``, ``yield``, etc.
         """
-        for ch in reversed(result):
-            if ch in (' ', '\t'):
-                continue
-            return ch.isalnum() or ch in ('_', ')', ']', '"', "'")
-        return False
+        idx = len(result) - 1
+        while idx >= 0 and result[idx] in (' ', '\t'):
+            idx -= 1
+        if idx < 0:
+            return False
+        ch = result[idx]
+        if not (ch.isalnum() or ch in ('_', ')', ']', '"', "'")):
+            return False
+        if ch in (')', ']', '"', "'"):
+            return True
+        # ch is alphanumeric or '_' — could be the end of a variable/function
+        # name or a keyword.  Collect the full preceding word and check.
+        word_end = idx
+        word_start = idx
+        while word_start > 0 and (result[word_start - 1].isalnum() or result[word_start - 1] == '_'):
+            word_start -= 1
+        word = ''.join(result[word_start:word_end + 1])
+        if word in _ARRAY_CONTEXT_KEYWORDS:
+            return False
+        return True
 
     while i < n:
         c = code[i]
@@ -1090,13 +1111,23 @@ def _split_single_line_if(code: str) -> str:
     while ($x > 0) $x--;        →  while ($x > 0) {\n    $x--;\n}
     foreach ($a as $v) echo $v; →  foreach ($a as $v) {\n    echo $v;\n}
     if ($x > 0) { ... }         →  unchanged (already has braces)
+
+    Also handles braceless next-line bodies:
+    foreach ($a as $v)           →  foreach ($a as $v) {
+        if ($v > 0)                     if ($v > 0) {
+            echo $v;                        echo $v;
+                                        }
+                                    }
     """
     lines = code.split('\n')
     result: list = []
-    for line in lines:
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
         m = _re_sli_kw.match(line)
         if not m:
             result.append(line)
+            idx += 1
             continue
         indent = m.group(1)
         kw = m.group(2)
@@ -1122,18 +1153,70 @@ def _split_single_line_if(code: str) -> str:
         if depth != 0:
             # Unbalanced — leave unchanged
             result.append(line)
+            idx += 1
             continue
         close_pos = i - 1  # position of the closing ')'
         cond = line[open_pos + 1:close_pos]
         after = line[close_pos + 1:].lstrip()
         # Only split when there is a body that does not already start with '{'
         # or ':' (the latter indicates an explicit colon-style block).
-        if not after or after[0] in ('{', ':'):
+        if after and after[0] in ('{', ':'):
             result.append(line)
+            idx += 1
+            continue
+        if not after or not after.strip():
+            # No body on this line — look ahead for a next-line body.
+            # Collect all subsequent lines that are indented deeper than the
+            # current keyword's indentation level.
+            indent_len = len(indent)
+            j = idx + 1
+            # Skip blank lines between header and body
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines):
+                next_line = lines[j]
+                next_indent = len(next_line) - len(next_line.lstrip())
+                if next_indent > indent_len:
+                    # Gather all lines at a deeper indentation as the body.
+                    body_lines: list[str] = []
+                    k = j
+                    while k < len(lines):
+                        bl = lines[k]
+                        if not bl.strip():
+                            body_lines.append(bl)
+                            k += 1
+                            continue
+                        bl_indent = len(bl) - len(bl.lstrip())
+                        if bl_indent > indent_len:
+                            body_lines.append(bl)
+                            k += 1
+                        else:
+                            break
+                    # Trim trailing blank lines from the body.
+                    while body_lines and not body_lines[-1].strip():
+                        body_lines.pop()
+                    if body_lines:
+                        # Recursively handle nested braceless blocks inside body.
+                        body_str = _split_single_line_if('\n'.join(body_lines))
+                        result.append(f'{indent}{kw} ({cond}) {{')
+                        result.extend(body_str.split('\n'))
+                        result.append(f'{indent}}}')
+                        # If the line that ended the body is an explicit block
+                        # closer (endforeach/endif/…), consume it here: the
+                        # brace block we just emitted already closes the loop,
+                        # so the closer would produce a spurious ``end``.
+                        if k < len(lines) and _re_end_body.search(
+                                lines[k].strip().rstrip(';').rstrip()):
+                            k += 1
+                        idx = k
+                        continue
+            result.append(line)
+            idx += 1
             continue
         body = after.rstrip(';').strip()
         if not body:
             result.append(line)
+            idx += 1
             continue
         # If the body ends with an explicit block-closer (endforeach,
         # endif, …) then it is already in "body; endX" form that
@@ -1143,10 +1226,12 @@ def _split_single_line_if(code: str) -> str:
         # pipeline the PHP closer has not yet been normalised to 'end'.
         if _re_end_body.search(body):
             result.append(line)
+            idx += 1
             continue
         result.append(f'{indent}{kw} ({cond}) {{')
         result.append(f'{indent}    {body};')
         result.append(f'{indent}}}')
+        idx += 1
     return '\n'.join(result)
 
 
@@ -1477,6 +1562,63 @@ def _rewrite_increment_decrement(code: str) -> str:
     return code
 
 
+def _rewrite_ternary_in_parens(s: str) -> str:
+    """Scan *s* character by character and rewrite any ``(…)`` group that contains
+    a ternary operator, leaving non-ternary groups unchanged.
+
+    This is called from ``_rewrite_ternary_expr`` and ``_rewrite_ternary_line``
+    when no top-level ``?`` is found — e.g. ``_cat(a, ($x ? b : c))`` — so that
+    ternaries nested inside explicit parentheses are still converted.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(s)
+    in_str: str | None = None
+    while i < n:
+        ch = s[i]
+        if in_str:
+            out.append(ch)
+            if ch == '\\':
+                i += 1
+                if i < n:
+                    out.append(s[i])
+            elif ch == in_str:
+                in_str = None
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            in_str = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '(':
+            # Find matching ')'
+            j = i + 1
+            pdepth = 1
+            ps: str | None = None
+            while j < n and pdepth > 0:
+                pc = s[j]
+                if ps:
+                    if pc == '\\':
+                        j += 1
+                    elif pc == ps:
+                        ps = None
+                elif pc in ('"', "'"):
+                    ps = pc
+                elif pc == '(':
+                    pdepth += 1
+                elif pc == ')':
+                    pdepth -= 1
+                j += 1
+            sub = s[i:j]  # includes the outer '(' and ')'
+            out.append(_rewrite_ternary_expr(sub))
+            i = j
+            continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+
 def _rewrite_ternary_expr(expr: str) -> str:
     """Convert a PHP ternary expression (not a full line) to Python."""
     expr = expr.strip()
@@ -1530,6 +1672,10 @@ def _rewrite_ternary_expr(expr: str) -> str:
         # null-coalesce step (step 8e only processes top-level ??).
         if '??' in expr:
             return _rewrite_null_coalesce(expr)
+        # No top-level ternary. Descend into parenthesised sub-expressions so
+        # that patterns like ``foo(cond ? a : b)`` are still converted.
+        if '?' in expr:
+            return _rewrite_ternary_in_parens(expr)
         return expr
 
     cond = expr[:q_pos].strip()
@@ -1699,7 +1845,12 @@ def _rewrite_ternary_line(line: str) -> str:
         i += 1
 
     if q_pos < 0:
-        return line
+        # No top-level ternary found. Descend into parenthesised sub-expressions
+        # so that patterns like ``$x = ($a ? $b : $c)`` or
+        # ``_cat(a, ($cond ? x : y))`` are still converted.
+        if '?' not in line:
+            return line
+        return _rewrite_ternary_in_parens(line)
 
     prefix = line[:q_pos].rstrip()
     rest_after_q = line[q_pos + 1:]
