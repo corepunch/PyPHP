@@ -97,6 +97,17 @@ _re_func_keyword = re.compile(r'\bfunction[ \t]+(\w+)\b')
 # Statement keywords that prefix an expression (extracted before concat processing)
 _STMT_KEYWORDS = ('echo ', 'return ', 'print ')
 
+# Pass-by-reference parameter prefix: &$param -> $param (outside strings)
+_re_byref_param = re.compile(r'&\$')
+
+# Octal integer literals: 0755 -> 0o755 (Python 3 syntax)
+# Matches a bare zero followed by 1-7 octal digits, not followed by '.' (float) or
+# another digit (longer number).  0 alone is not matched (starts with [1-7]).
+_re_octal_literal = re.compile(r'\b0([1-7][0-7]*)\b(?!\.)')
+
+# 'else if' (two-word PHP form) -> 'elif'
+_re_else_if = re.compile(r'\belse\s+if\b')
+
 # Indentation unit used by _braces_to_indent (4-space Python convention)
 _BRACE_INDENT = '    '
 
@@ -1923,9 +1934,77 @@ def _rewrite_null_coalesce(code: str) -> str:
 
     For assignment statements the rewrite only affects the right-hand side:
         ``$x = $a ?? $b``  →  ``$x = _php_coalesce(lambda: $a, lambda: $b)``
+
+    A recursive pre-pass processes ``??`` operators that appear inside
+    function-call parentheses so that expressions such as::
+
+        strval($comp->_elem["parent"] ?? "")
+
+    are also rewritten correctly.
     """
     if '??' not in code:
         return code  # fast path
+
+    # ── Pass 1: recursively rewrite ?? inside function-call parentheses ──────
+    n = len(code)
+    p1: list[str] = []
+    i = 0
+    while i < n:
+        ch = code[i]
+        if ch in ('"', "'"):
+            q = ch
+            p1.append(ch)
+            i += 1
+            while i < n:
+                c = code[i]
+                p1.append(c)
+                if c == '\\':
+                    i += 1
+                    if i < n:
+                        p1.append(code[i])
+                elif c == q:
+                    break
+                i += 1
+            i += 1
+            continue
+        if ch == '(':
+            # Find the matching ')'.
+            j = i + 1
+            d = 1
+            s2: str | None = None
+            while j < n and d > 0:
+                c = code[j]
+                if s2:
+                    if c == '\\':
+                        j += 1
+                    elif c == s2:
+                        s2 = None
+                elif c in ('"', "'"):
+                    s2 = c
+                elif c == '(':
+                    d += 1
+                elif c == ')':
+                    d -= 1
+                j += 1
+            inner = code[i + 1:j - 1]
+            if '??' in inner:
+                args = _split_call_args(inner)
+                processed = [_rewrite_null_coalesce(a) for a in args]
+                p1.append('(')
+                p1.append(','.join(processed))
+                p1.append(')')
+            else:
+                p1.append(code[i:j])
+            i = j
+            continue
+        p1.append(ch)
+        i += 1
+    code = ''.join(p1)
+
+    if '??' not in code:
+        return code  # all ?? were inside nested parens and are now rewritten
+
+    # ── Pass 2: rewrite top-level ?? (original logic) ────────────────────────
 
     def _split_on_null_coalesce(s: str) -> list[str]:
         """Split *s* on top-level ``??`` tokens, preserving string literals and
@@ -2642,8 +2721,8 @@ def _php_string_interpolation(code: str) -> str:
 def _split_call_args(code: str) -> list[str]:
     """Split *code* on top-level commas, respecting strings and bracket nesting.
 
-    Used by ``_apply_php_concat`` to separate function-call arguments so that
-    each argument's concat chain can be converted independently.
+    Used by ``_apply_php_concat`` and ``_rewrite_null_coalesce`` to separate
+    function-call arguments so that each argument can be processed independently.
     """
     args: list[str] = []
     current: list[str] = []
@@ -2680,6 +2759,63 @@ def _split_call_args(code: str) -> list[str]:
     if tail or args:
         args.append(tail)
     return args
+
+
+def _extract_arrow_fn_prefix(s: str) -> str | None:
+    """If *s* starts with an arrow-function header ``fn(params) =>``, return the
+    header including any trailing whitespace; otherwise return ``None``.
+
+    Used by ``_apply_php_concat`` ``flush_current()`` to prevent the arrow-function
+    header from being included as part of the first concat operand, so that::
+
+        fn($p) => $prefix . "." . $p[0]
+
+    is correctly rewritten to::
+
+        fn($p) => _cat($prefix, ".", $p[0])
+
+    rather than the erroneous::
+
+        _cat(fn($p) => $prefix, ".", $p[0])
+    """
+    if not s.startswith('fn'):
+        return None
+    if len(s) > 2 and (s[2].isalnum() or s[2] == '_'):
+        return None  # 'fn' is part of a longer identifier
+    i = 2
+    while i < len(s) and s[i].isspace():
+        i += 1
+    if i >= len(s) or s[i] != '(':
+        return None
+    # Find the matching ')' for the parameter list.
+    depth = 1
+    j = i + 1
+    in_str: str | None = None
+    while j < len(s) and depth > 0:
+        c = s[j]
+        if in_str:
+            if c == '\\':
+                j += 1
+            elif c == in_str:
+                in_str = None
+        elif c in ('"', "'"):
+            in_str = c
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+        j += 1
+    # Skip whitespace and verify '=>'.
+    k = j
+    while k < len(s) and s[k].isspace():
+        k += 1
+    if k + 1 >= len(s) or s[k] != '=' or s[k + 1] != '>':
+        return None
+    # Include any whitespace that follows '=>'.
+    arrow_end = k + 2
+    while arrow_end < len(s) and s[arrow_end] in (' ', '\t'):
+        arrow_end += 1
+    return s[:arrow_end]
 
 
 def _apply_php_concat(code: str) -> str:
@@ -2775,8 +2911,9 @@ def _apply_php_concat(code: str) -> str:
         current.clear()
         if not part.strip():
             return
-        # If this is the first operand and starts with a statement keyword
-        # (echo, return, print), extract it so concat only wraps the expression.
+        # If this is the first operand, extract any statement keyword (echo,
+        # return, print) or arrow-function header (fn(params) => ) as a prefix
+        # so that _cat() wraps only the pure expression body.
         if not chain and not echo_prefix[0]:
             stripped = part.lstrip()
             for _kw in _STMT_KEYWORDS:
@@ -2784,6 +2921,13 @@ def _apply_php_concat(code: str) -> str:
                     echo_prefix[0] = stripped[:len(_kw)]
                     part = stripped[len(_kw):]   # expression after keyword
                     break
+            else:
+                # Check for arrow function prefix: fn(params) => body
+                _arrow_pfx = _extract_arrow_fn_prefix(stripped)
+                if _arrow_pfx is not None:
+                    leading_ws = part[:len(part) - len(stripped)]
+                    echo_prefix[0] = leading_ws + _arrow_pfx
+                    part = stripped[len(_arrow_pfx):]
         chain.append(part)
 
     def flush_chain() -> None:
@@ -3035,6 +3179,11 @@ def php_to_python(code: str) -> str:
     #     private int $x;               ->  private $x;
     #     Must run before _expand_single_line_func_bodies and $var->__var.
     code = _strip_php_type_hints(code)
+    # 0i2. Strip pass-by-reference prefix from function parameters: &$param -> $param
+    #      PHP allows &$param to denote pass-by-reference; Python has no such syntax.
+    #      Must run before $var->__var so the $ prefix is still present.
+    if '&$' in code:
+        code = _sub_outside_strings(_re_byref_param, '$', code)
     # 0j. Variadic parameters/spread: ...$argName -> *$argName
     #     Must run before _apply_php_concat (step 4c) because _apply_php_concat treats
     #     '.' as a PHP string-concatenation operator; three consecutive dots would be
@@ -3094,8 +3243,10 @@ def php_to_python(code: str) -> str:
     #           Must run AFTER vii so that 'class Foo extends Bar implements Baz'
     #           has already been converted to 'class Foo(Bar) implements Baz'.
     code = _re_cls_after_impl.sub(r'\1', code)
-    # 1. PHP elseif -> Python elif (before step 2 which normalises block headers)
+    # 1. PHP elseif / 'else if' (two-word form) -> Python elif
+    #    Both forms are valid PHP; pyphp previously only handled the one-word form.
     code = _re_elseif.sub('elif', code)
+    code = _re_else_if.sub('elif', code)
     # 1b. Collapse multi-line foreach(...) expressions onto a single line so
     #     the foreach regexes (which use .+? without re.DOTALL) can match them.
     code = _normalize_foreach(code)
@@ -3196,6 +3347,9 @@ def php_to_python(code: str) -> str:
     #     config::TypeInfos (no $) does NOT accidentally access the static property.
     if '::$' in code:
         code = _sub_outside_strings(_re_static_prop, r'::_s_\1', code)
+    # 7c. Octal integer literals: 0755 -> 0o755 (Python 3 requires the 0o prefix).
+    #     Must run before $var->__var; applied outside strings only.
+    code = _sub_outside_strings(_re_octal_literal, r'0o\1', code)
     # 8. $var -> __var  outside strings (protects XPath ".//field[@name]")
     code = _sub_outside_strings(_re_var, r'__\1', code)
     # 8a. list($a,$b) = ... -> __a, __b = ...  (list() wrapper stripped after var subst)

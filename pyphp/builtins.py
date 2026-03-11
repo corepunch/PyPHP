@@ -288,8 +288,12 @@ def _make_php_builtins() -> dict:
             return s[start : len(s) + length]
         return s[start : start + length]
 
-    def _strpos(s, needle, offset=0):  return str(s).find(str(needle), offset)
-    def _strrpos(s, needle, offset=0): return str(s).rfind(str(needle), offset)
+    def _strpos(s, needle, offset=0):
+        r = str(s).find(str(needle), offset)
+        return r if r >= 0 else False
+    def _strrpos(s, needle, offset=0):
+        r = str(s).rfind(str(needle), offset)
+        return r if r >= 0 else False
     def _str_contains(h, n):           return str(n) in str(h)
     def _str_starts_with(h, n):        return str(h).startswith(str(n))
     def _str_ends_with(h, n):          return str(h).endswith(str(n))
@@ -396,10 +400,10 @@ def _make_php_builtins() -> dict:
     def _array_keys(arr, search_value=None, strict=False):
         arr = _to_array(arr)
         if search_value is not None:
-            if isinstance(arr, dict):
+            if isinstance(arr, (dict, PhpArray)):
                 return [k for k, v in arr.items() if (v is search_value or v == search_value)]
             return [i for i, v in enumerate(arr) if (v is search_value or v == search_value)]
-        return list(arr.keys()) if isinstance(arr, dict) else list(range(len(arr)))
+        return list(arr.keys()) if isinstance(arr, (dict, PhpArray)) else list(range(len(arr)))
     def _array_values(arr):
         arr = _to_array(arr)
         return list(arr.values()) if hasattr(arr, 'values') else list(arr)
@@ -1065,6 +1069,17 @@ def _make_php_builtins() -> dict:
                 elif name in caller_locals:
                     result[name] = caller_locals[name]
         return result
+
+    def _iterator_to_array(it, preserve_keys=True):
+        """PHP iterator_to_array(): collect iterator into an array.
+
+        With ``preserve_keys=True`` (default) the iterator is expected to yield
+        ``(key, value)`` pairs and a dict is returned.  With ``preserve_keys=False``
+        a plain list of values is returned (keys discarded).
+        """
+        if preserve_keys:
+            return dict(it)
+        return [v for _, v in it]
 
     def _php_range(start, end=None, step=1):
         """PHP range(): generate array of values from start to end (inclusive).
@@ -2217,6 +2232,7 @@ def _make_php_builtins() -> dict:
         'uksort':              _uksort,
         'range':               _php_range,
         'compact':             _compact,
+        'iterator_to_array':   _iterator_to_array,
         '_php_list':           _php_list,
         # math
         'abs':                 abs,
