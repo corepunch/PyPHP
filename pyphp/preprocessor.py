@@ -1895,12 +1895,17 @@ def _rewrite_ternary_line(line: str) -> str:
         return line
 
     raw_false = rest_after_q[c_pos + 1:].strip()
-    # Strip trailing semicolon *before* recursive conversion so _rewrite_ternary_expr
-    # can recognise the enclosing parens and process nested ternaries.
+    # Strip trailing semicolon or comma *before* recursive conversion so
+    # _rewrite_ternary_expr can recognise the enclosing parens and process
+    # nested ternaries.  A trailing ',' occurs when the ternary is a dict value
+    # in a multi-line dict literal.
     trailing = ''
     if raw_false.endswith(';'):
         raw_false = raw_false[:-1].rstrip()
         trailing = ';'
+    elif raw_false.endswith(','):
+        raw_false = raw_false[:-1].rstrip()
+        trailing = ','
 
     true_val = _rewrite_ternary_expr(rest_after_q[:c_pos].strip())
     false_val = _rewrite_ternary_expr(raw_false)
@@ -1919,8 +1924,36 @@ def _rewrite_ternary_line(line: str) -> str:
             assignment_part = kw_m.group(1)
             cond_expr = kw_m.group(2).strip()
         else:
-            assignment_part = ''
-            cond_expr = prefix.strip()
+            # Check for a dict-value context: 'key' : condition ? true : false
+            # Scan prefix for the last ':' at depth 0 (outside strings/brackets)
+            # to find a potential dict key separator.
+            colon_pos = -1
+            _d = 0
+            _in_s: str | None = None
+            _j = 0
+            while _j < len(prefix):
+                _ch = prefix[_j]
+                if _in_s:
+                    if _ch == '\\':
+                        _j += 2
+                        continue
+                    if _ch == _in_s:
+                        _in_s = None
+                elif _ch in ('"', "'"):
+                    _in_s = _ch
+                elif _ch in ('(', '[', '{'):
+                    _d += 1
+                elif _ch in (')', ']', '}'):
+                    _d -= 1
+                elif _ch == ':' and _d == 0:
+                    colon_pos = _j
+                _j += 1
+            if colon_pos >= 0:
+                assignment_part = prefix[:colon_pos + 1]
+                cond_expr = prefix[colon_pos + 1:].strip()
+            else:
+                assignment_part = ''
+                cond_expr = prefix.strip()
 
     # If the condition itself contains ??, process it (e.g. ($a ?? $b) ? x : y).
     if '??' in cond_expr:
