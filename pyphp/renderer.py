@@ -486,7 +486,7 @@ def render(source: str, ctx: Context, filename: str = '<template>', developer: b
     return scope['_out'].getvalue()
 
 
-def render_file(path: str | Path, ctx: Context, developer: bool = False) -> str:
+def render_file(path: str, ctx: Context, developer: bool = False) -> str:
     path = Path(path)
     source = path.read_text(encoding='utf-8')
     # Pure-PHP files commonly omit the closing "?>". The tokenizer requires a

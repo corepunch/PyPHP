@@ -2292,7 +2292,7 @@ def _rewrite_null_coalesce(code: str) -> str:
     return _rewrite_expr(code)
 
 
-def _find_assignment_end(code: str) -> int | None:
+def _find_assignment_end(code: str):
     """Return the index of the character *after* the ``=`` in a top-level
     assignment, or None if no plain assignment exists in the code.
 
@@ -2969,7 +2969,7 @@ def _split_call_args(code: str) -> list[str]:
     return args
 
 
-def _extract_arrow_fn_prefix(s: str) -> str | None:
+def _extract_arrow_fn_prefix(s: str):
     """If *s* starts with an arrow-function header ``fn(params) =>``, return the
     header including any trailing whitespace; otherwise return ``None``.
 
